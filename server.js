@@ -1,3 +1,114 @@
+const express = require('express');
+const session = require('express-session');
+const sqlite3 = require('sqlite3').verbose();
+const bcrypt = require('bcrypt');
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// DB初期化
+const db = new sqlite3.Database('./database.db');
+
+db.serialize(() => {
+  // ユーザーテーブル（初期100pt）
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      score INTEGER DEFAULT 100
+    )
+  `);
+
+  // 各自が提出したゲームデータのテーブル
+  db.run(`
+    CREATE TABLE IF NOT EXISTS game_submissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      game_id TEXT NOT NULL,
+      prefix TEXT NOT NULL,
+      username TEXT NOT NULL,
+      bet INTEGER NOT NULL,
+      dice INTEGER NOT NULL,
+      rank INTEGER NOT NULL,
+      cards INTEGER NOT NULL,
+      calculated INTEGER DEFAULT 0,
+      UNIQUE(game_id, username)
+    )
+  `);
+});
+
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+app.set('view engine', 'ejs');
+
+app.use(session({
+  secret: 'daifugo2_secret_key',
+  resave: false,
+  saveUninitialized: false
+}));
+
+function requireLogin(req, res, next) {
+  if (!req.session.userId) {
+    return res.redirect('/login');
+  }
+  next();
+}
+
+// ログイン・登録
+app.get('/login', (req, res) => {
+  res.render('login', { error: null });
+});
+
+app.post('/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.render('login', { error: 'ユーザー名とパスワードを入力してください' });
+  }
+
+  db.get('SELECT * FROM users WHERE username = ?', [username], async (err, user) => {
+    if (err) return res.render('login', { error: 'DBエラーが発生しました' });
+
+    if (user) {
+      const match = await bcrypt.compare(password, user.password);
+      if (match) {
+        req.session.userId = user.id;
+        req.session.username = user.username;
+        return res.redirect('/');
+      } else {
+        return res.render('login', { error: 'パスワードが違います' });
+      }
+    } else {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      db.run('INSERT INTO users (username, password, score) VALUES (?, ?, 100)', [username, hashedPassword], function (err) {
+        if (err) return res.render('login', { error: '登録に失敗しました' });
+        req.session.userId = this.lastID;
+        req.session.username = username;
+        return res.redirect('/');
+      });
+    }
+  });
+});
+
+app.get('/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/login');
+});
+
+// ダッシュボード
+app.get('/', requireLogin, (req, res) => {
+  db.get('SELECT score FROM users WHERE id = ?', [req.session.userId], (err, user) => {
+    res.render('dashboard', { username: req.session.username, score: user ? user.score : 100 });
+  });
+});
+
+// ゲーム画面
+app.get('/game', requireLogin, (req, res) => {
+  const gameId = req.query.game_id || '';
+  res.render('game', { gameId, username: req.session.username });
+});
+
 // 自分の情報を提出して即座に計算・反映・結果返却
 app.post('/game/submit', requireLogin, (req, res) => {
   const { game_id, bet, dice, cards } = req.body;
@@ -10,7 +121,7 @@ app.post('/game/submit', requireLogin, (req, res) => {
   const numberMatch = game_id.trim().match(/\d+$/);
   
   const prefix = prefixMatch ? prefixMatch[0].toLowerCase() : 'other';
-  const totalPlayers = numberMatch ? parseInt(numberMatch[0], 10) : 4; // 数字がなければデフォルト4人
+  const totalPlayers = numberMatch ? parseInt(numberMatch[0], 10) : 4;
 
   const betNum = parseInt(bet, 10);
   const diceNum = parseInt(dice, 10);
@@ -20,14 +131,17 @@ app.post('/game/submit', requireLogin, (req, res) => {
     return res.status(400).json({ error: '掛け金は10pt以上、10pt刻みで入力してください' });
   }
 
-  // 1. 自身のデータ登録/更新
+  // 1. 自身のデータ登録/更新（プレースホルダーの数を正確に合わせる修正）
   db.run(`
     INSERT INTO game_submissions (game_id, prefix, username, bet, dice, rank, cards, calculated)
     VALUES (?, ?, ?, ?, ?, 0, ?, 0)
     ON CONFLICT(game_id, username) 
     DO UPDATE SET bet=excluded.bet, dice=excluded.dice, cards=excluded.cards
   `, [game_id, prefix, username, betNum, diceNum, cardsNum], (err) => {
-    if (err) return res.status(500).json({ error: '保存に失敗しました' });
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ error: '保存に失敗しました' });
+    }
 
     // 2. このゲームIDの全参加者データから順位および点数計算
     db.all('SELECT * FROM game_submissions WHERE game_id = ?', [game_id], (err, players) => {
@@ -54,16 +168,12 @@ app.post('/game/submit', requireLogin, (req, res) => {
         let pointChange = 0;
 
         if (p.rank === totalPlayers) {
-          // 最下位（後で一括引き算）
           return;
         } else if (p.rank <= winThreshold) {
-          // 勝ち
           pointChange = Math.floor((otherCardsSum + (betNum / 10)) * diceNum);
         } else if (p.rank === drawRank) {
-          // 奇数の真ん中順位（0点）
           pointChange = 0;
         } else {
-          // 負け（最下位以外）
           pointChange = -Math.floor(otherCardsSum * diceNum);
         }
 
@@ -73,23 +183,70 @@ app.post('/game/submit', requireLogin, (req, res) => {
 
       // 最下位の場合の点数計算
       const myData = players.find(p => p.username === username);
-      if (myData.rank === totalPlayers) {
+      if (myData && myData.rank === totalPlayers) {
         myPointChange = -nonLastTotalPointChange;
       }
 
       // ユーザーの総持ちptに反映
       db.run('UPDATE users SET score = score + ? WHERE username = ?', [myPointChange, username], () => {
-        // 現在の最新ポイントと順位を取得して返却
         db.get('SELECT score FROM users WHERE username = ?', [username], (err, user) => {
           res.json({
             success: true,
-            rank: myData.rank,
+            rank: myData ? myData.rank : 1,
             totalPlayers: totalPlayers,
             pointChange: myPointChange,
-            currentScore: user.score
+            currentScore: user ? user.score : 100
           });
         });
       });
     });
   });
+});
+
+// 総合 & アルファベット別ランキング
+app.get('/ranking', requireLogin, (req, res) => {
+  const prefixFilter = req.query.prefix || '';
+
+  db.all('SELECT username, score FROM users ORDER BY score DESC', [], (err, overallRanking) => {
+    db.all('SELECT DISTINCT prefix FROM game_submissions', [], (err, prefixes) => {
+      
+      if (prefixFilter) {
+        db.all(`
+          SELECT DISTINCT u.username, u.score 
+          FROM users u 
+          JOIN game_submissions gs ON u.username = gs.username 
+          WHERE gs.prefix = ? 
+          ORDER BY u.score DESC
+        `, [prefixFilter], (err, fRows) => {
+          res.render('ranking', {
+            overallRanking,
+            filteredRanking: fRows,
+            prefixes: prefixes ? prefixes.map(p => p.prefix) : [],
+            currentPrefix: prefixFilter,
+            username: req.session.username
+          });
+        });
+      } else {
+        res.render('ranking', {
+          overallRanking,
+          filteredRanking: null,
+          prefixes: prefixes ? prefixes.map(p => p.prefix) : [],
+          currentPrefix: '',
+          username: req.session.username
+        });
+      }
+    });
+  });
+});
+
+// 週末リセット
+app.post('/ranking/reset', requireLogin, (req, res) => {
+  db.run('UPDATE users SET score = 100', [], (err) => {
+    if (err) return res.status(500).send('リセットに失敗しました');
+    res.redirect('/ranking');
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
 });
