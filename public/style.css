@@ -32,4 +32,10 @@ button:hover, .btn:hover { background: #2980b9; }
 table { width: 100%; border-collapse: collapse; margin-top: 20px; }
 th, td { padding: 10px; border: 1px solid #ddd; text-align: center; }
 th { background-color: #f8f9fa; }
-.tag { display: inline-block; padding: 4px 8px; background: #e0f7fa; color: #00796b; border-radius: 4px; font-size: 14px; margin-bottom: 15px; }
+/* 送信中演出のアニメーション */
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+.pulsing { animation: pulse 1s infinite; background-color: #2980b9 !important; }
