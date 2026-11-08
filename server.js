@@ -91,6 +91,18 @@ app.get('/logout', (req, res) => {
   res.redirect('/login');
 });
 
+// アカウント削除機能
+app.post('/account/delete', requireLogin, (req, res) => {
+  const username = req.session.username;
+  db.serialize(() => {
+    db.run('DELETE FROM users WHERE username = ?', [username]);
+    db.run('DELETE FROM game_submissions WHERE username = ?', [username]);
+  });
+  req.session.destroy(() => {
+    res.redirect('/login');
+  });
+});
+
 app.get('/', (req, res) => {
   if (!req.session.userId) {
     return res.render('login', { error: null });
@@ -105,7 +117,6 @@ app.get('/game', requireLogin, (req, res) => {
   res.render('game', { gameId, username: req.session.username });
 });
 
-// 自分の情報を提出（全員揃ったら自動で一括計算）
 app.post('/game/submit', requireLogin, (req, res) => {
   const { game_id, bet, dice, other_cards_sum } = req.body;
   const username = req.session.username;
@@ -137,7 +148,6 @@ app.post('/game/submit', requireLogin, (req, res) => {
     const prefix = prefixMatch ? prefixMatch[0].toLowerCase() : 'other';
     const totalPlayers = numberMatch ? parseInt(numberMatch[0], 10) : 4;
 
-    // 自身のデータを保存/更新
     db.run(`
       INSERT INTO game_submissions (game_id, prefix, username, bet, dice, other_cards_sum)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -148,12 +158,10 @@ app.post('/game/submit', requireLogin, (req, res) => {
         return res.status(500).json({ error: '保存に失敗しました' });
       }
 
-      // 現在このゲームIDで何人提出しているか確認
       db.all('SELECT * FROM game_submissions WHERE game_id = ?', [game_id], (err, players) => {
         if (err) return res.status(400).json({ error: 'データ取得エラー' });
 
         if (players.length < totalPlayers) {
-          // まだ全員揃っていない
           return res.json({
             success: true,
             status: 'waiting',
@@ -161,8 +169,6 @@ app.post('/game/submit', requireLogin, (req, res) => {
           });
         }
 
-        // --- 全員揃ったので一括計算を実行 ---
-        // 他プレイヤーのカード数の総数（other_cards_sum）が少ない順に並べ替えて順位を決定
         players.sort((a, b) => a.other_cards_sum - b.other_cards_sum);
         players.forEach((p, idx) => { p.rank = idx + 1; });
 
@@ -175,19 +181,15 @@ app.post('/game/submit', requireLogin, (req, res) => {
         let nonLastTotalChange = 0;
         let changes = {};
 
-        // 1. 最下位以外を計算
         players.forEach(p => {
           let change = 0;
           if (p.rank === totalPlayers) {
-            return; // 最下位は後で
+            return;
           } else if (p.rank <= upperCount) {
-            // 上位の式: (残カード数 + (掛け金)/10)*サイコロの目 + (掛け金)/(プレイヤー数/2)
             change = Math.floor((p.other_cards_sum + (p.bet / 10)) * p.dice + (p.bet / (totalPlayers / 2)));
           } else if (p.rank === drawRank) {
-            // 奇数の真ん中順位
             change = 0;
           } else {
-            // 負け（最下位以外）: -(残カード数 * サイコロの目)
             change = -Math.floor(p.other_cards_sum * p.dice);
           }
 
@@ -195,25 +197,22 @@ app.post('/game/submit', requireLogin, (req, res) => {
           nonLastTotalChange += change;
         });
 
-        // 2. 最下位の計算（そのゲーム内での点数の増減をすべて合計し、その分をマイナス）
         const lastPlayer = players.find(p => p.rank === totalPlayers);
         if (lastPlayer) {
           changes[lastPlayer.username] = -nonLastTotalChange;
         }
 
-        // DBに反映（各ユーザーのscoreとlast_changeを更新）
         let completedCount = 0;
         players.forEach(p => {
           const ptChange = changes[p.username];
           db.run('UPDATE users SET score = score + ?, last_change = ? WHERE username = ?', [ptChange, ptChange, p.username], () => {
             completedCount++;
             if (completedCount === players.length) {
-              // 計算が終わったら提出データをクリアして完了を通知
               db.run('DELETE FROM game_submissions WHERE game_id = ?', [game_id], () => {
                 res.json({
                   success: true,
                   status: 'completed',
-                  message: '全員のデータが揃い、点数が確定しました！ランキングで結果をご確認ください。'
+                  message: '全員のデータが揃い、点数が確定しました！ランキング画面へ移動します...'
                 });
               });
             }
@@ -224,7 +223,6 @@ app.post('/game/submit', requireLogin, (req, res) => {
   });
 });
 
-// ランキング
 app.get('/ranking', requireLogin, (req, res) => {
   const prefixFilter = req.query.prefix || '';
 
@@ -260,7 +258,11 @@ app.get('/ranking', requireLogin, (req, res) => {
   });
 });
 
+// ランキングリセット（石田のみ実行可能）
 app.post('/ranking/reset', requireLogin, (req, res) => {
+  if (req.session.username !== '石田') {
+    return res.status(403).send('リセット権限はプレイヤー名「石田」のみに制限されています。');
+  }
   db.run('UPDATE users SET score = 100, last_change = 0', [], (err) => {
     if (err) return res.status(500).send('リセットに失敗しました');
     res.redirect('/ranking');
