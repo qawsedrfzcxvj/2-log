@@ -2,26 +2,42 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>大富豪2 - 総合ランキング</title>
+  <title>大富豪2 - ランキング</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div class="container">
-    <h1>総合点数ランキング</h1>
-    <table>
-      <tr>
-        <th>順位</th>
-        <th>ユーザー名</th>
-        <th>所持ポイント</th>
-      </tr>
-      <% ranking.forEach((u, index) => { %>
-        <tr>
-          <td><%= index + 1 %></td>
-          <td><%= u.username %></td>
-          <td><%= u.score %> pt</td>
-        </tr>
+    <h1>ランキング</h1>
+
+    <!-- プレフィックス（アルファベット）ごとの絞り込み -->
+    <div style="text-align:center; margin-bottom: 20px;">
+      <a href="/ranking" class="btn" style="width: auto; padding: 6px 12px; <%= !currentPrefix ? 'background:#2980b9;' : 'background:#95a5a6;' %>">総合ランキング</a>
+      <% prefixes.forEach(p => { %>
+        <a href="/ranking?prefix=<%= p %>" class="btn" style="width: auto; padding: 6px 12px; <%= currentPrefix === p ? 'background:#2980b9;' : 'background:#95a5a6;' %>">グループ 「<%= p.toUpperCase() %>」</a>
       <% }); %>
-    </table>
+    </div>
+
+    <% if (currentPrefix) { %>
+      <h2>グループ 「<%= currentPrefix.toUpperCase() %>」 内ランキング</h2>
+      <table>
+        <tr><th>順位</th><th>ユーザー名</th><th>所持ポイント</th></tr>
+        <% if (filteredRanking && filteredRanking.length > 0) { %>
+          <% filteredRanking.forEach((u, i) => { %>
+            <tr><td><%= i + 1 %></td><td><%= u.username %></td><td><%= u.score %> pt</td></tr>
+          <% }); %>
+        <% } else { %>
+          <tr><td colspan="3">データがありません</td></tr>
+        <% } %>
+      </table>
+    <% } else { %>
+      <h2>総合点数ランキング</h2>
+      <table>
+        <tr><th>順位</th><th>ユーザー名</th><th>所持ポイント</th></tr>
+        <% overallRanking.forEach((u, i) => { %>
+          <tr><td><%= i + 1 %></td><td><%= u.username %></td><td><%= u.score %> pt</td></tr>
+        <% }); %>
+      </table>
+    <% } %>
 
     <div style="margin-top:30px; border-top: 1px solid #ccc; padding-top: 15px;">
       <h3>週末リセット</h3>
