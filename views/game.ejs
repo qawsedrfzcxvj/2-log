@@ -25,9 +25,10 @@
       <input type="number" id="other_cards_sum" min="0" value="0" required>
     </div>
 
-    <button type="button" onclick="submitMyData()" class="btn">情報を送信する</button>
+    <button type="button" id="submitBtn" onclick="submitMyData()" class="btn">情報を送信する</button>
 
-    <div id="msgArea" style="margin-top: 20px; text-align: center; font-weight: bold; color: #2980b9;"></div>
+    <!-- 送信中の演出メッセージエリア -->
+    <div id="msgArea" style="margin-top: 20px; text-align: center; font-weight: bold; color: #2980b9; font-size: 16px;"></div>
 
     <a href="/ranking" class="btn btn-secondary" style="margin-top: 20px;">ランキングで結果を確認する</a>
     <a href="/" class="btn btn-secondary" style="margin-top: 10px;">ダッシュボードに戻る</a>
@@ -46,22 +47,51 @@
         return;
       }
 
-      const res = await fetch('/game/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ game_id: gameId, bet, dice, other_cards_sum })
-      });
+      const btn = document.getElementById('submitBtn');
+      const msgArea = document.getElementById('msgArea');
 
-      const data = await res.json();
-      if(data.error) {
-        alert(data.error);
-        return;
-      }
+      // 送信中の演出
+      btn.disabled = true;
+      btn.classList.add('pulsing');
+      btn.innerText = '送信中...';
+      msgArea.innerText = 'サーバーへデータを送信しています...';
 
-      document.getElementById('msgAreainnerText') = data.message;
-      alert(data.message);
-      if(data.status === 'completed') {
-        window.location.href = '/ranking';
+      try {
+        const res = await fetch('/game/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ game_id: gameId, bet, dice, other_cards_sum })
+        });
+
+        const data = await res.json();
+        if(data.error) {
+          alert(data.error);
+          btn.disabled = false;
+          btn.classList.remove('pulsing');
+          btn.innerText = '情報を送信する';
+          msgArea.innerText = '';
+          return;
+        }
+
+        msgArea.innerText = data.message;
+        
+        // 成功時の演出（1.5秒後にメッセージ切り替えまたはリダイレクト）
+        setTimeout(() => {
+          if(data.status === 'completed') {
+            window.location.href = '/ranking';
+          } else {
+            btn.disabled = false;
+            btn.classList.remove('pulsing');
+            btn.innerText = '情報を送信する（再送・更新）';
+          }
+        }, 1200);
+
+      } catch (err) {
+        alert('通信エラーが発生しました');
+        btn.disabled = false;
+        btn.classList.remove('pulsing');
+        btn.innerText = '情報を送信する';
+        msgArea.innerText = '';
       }
     }
   </script>
