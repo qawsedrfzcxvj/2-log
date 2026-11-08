@@ -25,7 +25,9 @@
             <tr>
               <td><%= i + 1 %></td>
               <td><%= u.username %></td>
-              <td style="color: <%= u.last_change >= 0 ? 'green' : 'red' %>;"><%= u.last_change >= 0 ? '+' + u.last_change : u.last_change %> pt</td>
+              <td style="color: <%= u.last_change >= 0 ? '#27ae60' : '#e74c3c' %>; font-weight:bold;">
+                <%= u.last_change >= 0 ? '+' + u.last_change : u.last_change %> pt
+              </td>
               <td><%= u.score %> pt</td>
             </tr>
           <% }); %>
@@ -41,19 +43,25 @@
           <tr>
             <td><%= i + 1 %></td>
             <td><%= u.username %></td>
-            <td style="color: <%= u.last_change >= 0 ? 'green' : 'red' %>;"><%= u.last_change >= 0 ? '+' + u.last_change : u.last_change %> pt</td>
+            <td style="color: <%= u.last_change >= 0 ? '#27ae60' : '#e74c3c' %>; font-weight:bold;">
+              <%= u.last_change >= 0 ? '+' + u.last_change : u.last_change %> pt
+            </td>
             <td><%= u.score %> pt</td>
           </tr>
         <% }); %>
       </table>
     <% } %>
 
-    <div style="margin-top:30px; border-top: 1px solid #ccc; padding-top: 15px;">
-      <h3>週末リセット</h3>
-      <form action="/ranking/reset" method="POST" onsubmit="return confirm('本当に全プレイヤーのポイントを100ptにリセットしますか？');">
-        <button type="submit" class="btn btn-danger">点数を100ptにリセットする</button>
-      </form>
-    </div>
+    <!-- プレイヤー名「石田」のみに表示されるリセットボタン -->
+    <% if (username === '石田') { %>
+      <div style="margin-top:30px; border-top: 1px solid #ccc; padding-top: 15px;">
+        <h3 style="color: #e74c3c;">管理者メニュー（石田専用）</h3>
+        <p style="font-size:12px; color: #666;">全プレイヤーのポイントを100ptにリセットします。</p>
+        <form action="/ranking/reset" method="POST" onsubmit="return confirm('本当に全プレイヤーのポイントを100ptにリセットしますか？');">
+          <button type="submit" class="btn btn-danger">点数を100ptにリセットする</button>
+        </form>
+      </div>
+    <% } %>
 
     <a href="/" class="btn btn-secondary" style="margin-top: 20px;">ダッシュボードに戻る</a>
   </div>
