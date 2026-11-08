@@ -56,7 +56,7 @@ function requireLogin(req, res, next) {
   next();
 }
 
-// ログイン・登録
+// ログイン・登録画面
 app.get('/login', (req, res) => {
   res.render('login', { error: null });
 });
@@ -96,8 +96,11 @@ app.get('/logout', (req, res) => {
   res.redirect('/login');
 });
 
-// ダッシュボード
-app.get('/', requireLogin, (req, res) => {
+// トップページ（未ログインならログイン画面を200 OKで返し、ヘルスチェックを通す）
+app.get('/', (req, res) => {
+  if (!req.session.userId) {
+    return res.render('login', { error: null });
+  }
   db.get('SELECT score FROM users WHERE id = ?', [req.session.userId], (err, user) => {
     res.render('dashboard', { username: req.session.username, score: user ? user.score : 100 });
   });
@@ -109,93 +112,115 @@ app.get('/game', requireLogin, (req, res) => {
   res.render('game', { gameId, username: req.session.username });
 });
 
-// 自分の情報を提出して即座に計算・反映・結果返却
+// 自分の情報を提出して新ルールで計算・反映
 app.post('/game/submit', requireLogin, (req, res) => {
   const { game_id, bet, dice, cards } = req.body;
   const username = req.session.username;
 
   if (!game_id) return res.status(400).json({ error: 'ゲームIDを入力してください' });
 
-  // IDからアルファベット（グループ）と参加人数nを取得 (例: "a4" -> prefix: "a", n: 4)
-  const prefixMatch = game_id.trim().match(/^[a-zA-Z]+/);
-  const numberMatch = game_id.trim().match(/\d+$/);
-  
-  const prefix = prefixMatch ? prefixMatch[0].toLowerCase() : 'other';
-  const totalPlayers = numberMatch ? parseInt(numberMatch[0], 10) : 4;
+  db.get('SELECT score FROM users WHERE username = ?', [username], (err, currentUser) => {
+    if (err || !currentUser) return res.status(400).json({ error: 'ユーザー情報が見つかりません' });
 
-  const betNum = parseInt(bet, 10);
-  const diceNum = parseInt(dice, 10);
-  const cardsNum = parseInt(cards, 10);
-
-  if (isNaN(betNum) || betNum < 10 || betNum % 10 !== 0) {
-    return res.status(400).json({ error: '掛け金は10pt以上、10pt刻みで入力してください' });
-  }
-
-  // 1. 自身のデータ登録/更新（プレースホルダーの数を正確に合わせる修正）
-  db.run(`
-    INSERT INTO game_submissions (game_id, prefix, username, bet, dice, rank, cards, calculated)
-    VALUES (?, ?, ?, ?, ?, 0, ?, 0)
-    ON CONFLICT(game_id, username) 
-    DO UPDATE SET bet=excluded.bet, dice=excluded.dice, cards=excluded.cards
-  `, [game_id, prefix, username, betNum, diceNum, cardsNum], (err) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ error: '保存に失敗しました' });
+    if (currentUser.score <= 0) {
+      return res.status(400).json({ error: '持ち点が0以下のため参加できません' });
     }
 
-    // 2. このゲームIDの全参加者データから順位および点数計算
-    db.all('SELECT * FROM game_submissions WHERE game_id = ?', [game_id], (err, players) => {
-      if (err || players.length === 0) return res.status(400).json({ error: 'データ計算エラー' });
+    const betNum = parseInt(bet, 10);
+    const diceNum = parseInt(dice, 10);
+    const cardsNum = parseInt(cards, 10);
 
-      // 残りカード枚数が少ない順に並べ替えて順位（rank）を決定（昇順）
-      players.sort((a, b) => a.cards - b.cards);
-      players.forEach((p, idx) => { p.rank = idx + 1; });
+    if (isNaN(betNum) || betNum < 10 || betNum % 10 !== 0) {
+      return res.status(400).json({ error: '掛け金は10pt以上、10pt刻みで入力してください' });
+    }
 
-      const totalCardsAll = players.reduce((sum, p) => sum + p.cards, 0);
+    if (betNum > currentUser.score) {
+      return res.status(400).json({ error: `掛け金は現在の持ち点（${currentUser.score}pt）以下にしてください` });
+    }
 
-      // プラス点獲得の境界線（勝ちライン）算出
-      const winThreshold = (totalPlayers % 2 === 0) 
-        ? (totalPlayers / 2) 
-        : Math.floor((totalPlayers - 1) / 2);
-      
-      const drawRank = (totalPlayers % 2 !== 0) ? (winThreshold + 1) : -1;
+    const prefixMatch = game_id.trim().match(/^[a-zA-Z]+/);
+    const numberMatch = game_id.trim().match(/\d+$/);
+    
+    const prefix = prefixMatch ? prefixMatch[0].toLowerCase() : 'other';
+    const totalPlayers = numberMatch ? parseInt(numberMatch[0], 10) : 4;
 
-      let nonLastTotalPointChange = 0;
-      let myPointChange = 0;
-
-      players.forEach(p => {
-        const otherCardsSum = totalCardsAll - p.cards;
-        let pointChange = 0;
-
-        if (p.rank === totalPlayers) {
-          return;
-        } else if (p.rank <= winThreshold) {
-          pointChange = Math.floor((otherCardsSum + (betNum / 10)) * diceNum);
-        } else if (p.rank === drawRank) {
-          pointChange = 0;
-        } else {
-          pointChange = -Math.floor(otherCardsSum * diceNum);
-        }
-
-        nonLastTotalPointChange += pointChange;
-        if (p.username === username) myPointChange = pointChange;
-      });
-
-      // 最下位の場合の点数計算
-      const myData = players.find(p => p.username === username);
-      if (myData && myData.rank === totalPlayers) {
-        myPointChange = -nonLastTotalPointChange;
+    db.run(`
+      INSERT INTO game_submissions (game_id, prefix, username, bet, dice, rank, cards, calculated)
+      VALUES (?, ?, ?, ?, ?, 0, ?, 0)
+      ON CONFLICT(game_id, username) 
+      DO UPDATE SET bet=excluded.bet, dice=excluded.dice, cards=excluded.cards
+    `, [game_id, prefix, username, betNum, diceNum, cardsNum], (err) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ error: '保存に失敗しました' });
       }
 
-      // ユーザーの総持ちptに反映
-      db.run('UPDATE users SET score = score + ? WHERE username = ?', [myPointChange, username], () => {
-        db.get('SELECT score FROM users WHERE username = ?', [username], (err, user) => {
-          res.json({
-            success: true,
-            rank: myData ? myData.rank : 1,
-            totalPlayers: totalPlayers,
-            pointChange: myPointChange,
-            currentScore: user ? user.score : 100
+      db.all('SELECT * FROM game_submissions WHERE game_id = ?', [game_id], (err, players) => {
+        if (err || players.length === 0) return res.status(400).json({ error: 'データ計算エラー' });
+
+        players.sort((a, b) => a.cards - b.cards);
+        players.forEach((p, idx) => { p.rank = idx + 1; });
+
+        const totalCardsAll = players.reduce((sum, p) => sum + p.cards, 0);
+        const totalBet = players.reduce((sum, p) => sum + p.bet, 0);
+
+        const upperCount = (totalPlayers % 2 === 0) 
+          ? (totalPlayers / 2) 
+          : Math.floor((totalPlayers - 1) / 2);
+
+        const shareOfPool = upperCount > 0 ? Math.floor((totalBet / upperCount) / 10) * 10 : 0;
+
+        let nonLastBaseSum = 0;
+        let basePoints = {};
+
+        players.forEach(p => {
+          const otherCardsSum = totalCardsAll - p.cards;
+          let base = 0;
+
+          if (p.rank === totalPlayers) {
+            base = 0;
+          } else if (p.rank <= upperCount) {
+            base = Math.floor((otherCardsSum + (p.bet / 10)) * p.dice);
+          } else if (totalPlayers % 2 !== 0 && p.rank === upperCount + 1) {
+            base = 0;
+          } else {
+            base = -Math.floor(otherCardsSum * p.dice);
+          }
+
+          basePoints[p.username] = base;
+          if (p.rank !== totalPlayers) {
+            nonLastBaseSum += base;
+          }
+        });
+
+        let myPointChange = 0;
+        let myRank = 1;
+
+        players.forEach(p => {
+          let finalChange = 0;
+          if (p.rank <= upperCount) {
+            finalChange = basePoints[p.username] + shareOfPool;
+          } else if (p.rank === totalPlayers) {
+            finalChange = -nonLastBaseSum;
+          } else {
+            finalChange = basePoints[p.username];
+          }
+
+          if (p.username === username) {
+            myPointChange = finalChange;
+            myRank = p.rank;
+          }
+        });
+
+        db.run('UPDATE users SET score = score + ? WHERE username = ?', [myPointChange, username], () => {
+          db.get('SELECT score FROM users WHERE username = ?', [username], (err, user) => {
+            res.json({
+              success: true,
+              rank: myRank,
+              totalPlayers: totalPlayers,
+              pointChange: myPointChange,
+              currentScore: user ? user.score : 100
+            });
           });
         });
       });
