@@ -7,21 +7,19 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// DB初期化
 const db = new sqlite3.Database('./database.db');
 
 db.serialize(() => {
-  // ユーザーテーブル（初期100pt）
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL,
-      score INTEGER DEFAULT 100
+      score INTEGER DEFAULT 100,
+      last_change INTEGER DEFAULT 0
     )
   `);
 
-  // 各自が提出したゲームデータのテーブル
   db.run(`
     CREATE TABLE IF NOT EXISTS game_submissions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,9 +28,7 @@ db.serialize(() => {
       username TEXT NOT NULL,
       bet INTEGER NOT NULL,
       dice INTEGER NOT NULL,
-      rank INTEGER NOT NULL,
-      cards INTEGER NOT NULL,
-      calculated INTEGER DEFAULT 0,
+      other_cards_sum INTEGER NOT NULL,
       UNIQUE(game_id, username)
     )
   `);
@@ -56,7 +52,6 @@ function requireLogin(req, res, next) {
   next();
 }
 
-// ログイン・登録画面
 app.get('/login', (req, res) => {
   res.render('login', { error: null });
 });
@@ -81,7 +76,7 @@ app.post('/login', async (req, res) => {
       }
     } else {
       const hashedPassword = await bcrypt.hash(password, 10);
-      db.run('INSERT INTO users (username, password, score) VALUES (?, ?, 100)', [username, hashedPassword], function (err) {
+      db.run('INSERT INTO users (username, password, score, last_change) VALUES (?, ?, 100, 0)', [username, hashedPassword], function (err) {
         if (err) return res.render('login', { error: '登録に失敗しました' });
         req.session.userId = this.lastID;
         req.session.username = username;
@@ -96,7 +91,6 @@ app.get('/logout', (req, res) => {
   res.redirect('/login');
 });
 
-// トップページ（未ログインならログイン画面を200 OKで返し、ヘルスチェックを通す）
 app.get('/', (req, res) => {
   if (!req.session.userId) {
     return res.render('login', { error: null });
@@ -106,15 +100,14 @@ app.get('/', (req, res) => {
   });
 });
 
-// ゲーム画面
 app.get('/game', requireLogin, (req, res) => {
   const gameId = req.query.game_id || '';
   res.render('game', { gameId, username: req.session.username });
 });
 
-// 自分の情報を提出して新ルールで計算・反映
+// 自分の情報を提出（全員揃ったら自動で一括計算）
 app.post('/game/submit', requireLogin, (req, res) => {
-  const { game_id, bet, dice, cards } = req.body;
+  const { game_id, bet, dice, other_cards_sum } = req.body;
   const username = req.session.username;
 
   if (!game_id) return res.status(400).json({ error: 'ゲームIDを入力してください' });
@@ -128,7 +121,7 @@ app.post('/game/submit', requireLogin, (req, res) => {
 
     const betNum = parseInt(bet, 10);
     const diceNum = parseInt(dice, 10);
-    const cardsNum = parseInt(cards, 10);
+    const cardsNum = parseInt(other_cards_sum, 10);
 
     if (isNaN(betNum) || betNum < 10 || betNum % 10 !== 0) {
       return res.status(400).json({ error: '掛け金は10pt以上、10pt刻みで入力してください' });
@@ -144,83 +137,86 @@ app.post('/game/submit', requireLogin, (req, res) => {
     const prefix = prefixMatch ? prefixMatch[0].toLowerCase() : 'other';
     const totalPlayers = numberMatch ? parseInt(numberMatch[0], 10) : 4;
 
+    // 自身のデータを保存/更新
     db.run(`
-      INSERT INTO game_submissions (game_id, prefix, username, bet, dice, rank, cards, calculated)
-      VALUES (?, ?, ?, ?, ?, 0, ?, 0)
+      INSERT INTO game_submissions (game_id, prefix, username, bet, dice, other_cards_sum)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(game_id, username) 
-      DO UPDATE SET bet=excluded.bet, dice=excluded.dice, cards=excluded.cards
+      DO UPDATE SET bet=excluded.bet, dice=excluded.dice, other_cards_sum=excluded.other_cards_sum
     `, [game_id, prefix, username, betNum, diceNum, cardsNum], (err) => {
       if (err) {
-        console.error(err);
         return res.status(500).json({ error: '保存に失敗しました' });
       }
 
+      // 現在このゲームIDで何人提出しているか確認
       db.all('SELECT * FROM game_submissions WHERE game_id = ?', [game_id], (err, players) => {
-        if (err || players.length === 0) return res.status(400).json({ error: 'データ計算エラー' });
+        if (err) return res.status(400).json({ error: 'データ取得エラー' });
 
-        players.sort((a, b) => a.cards - b.cards);
+        if (players.length < totalPlayers) {
+          // まだ全員揃っていない
+          return res.json({
+            success: true,
+            status: 'waiting',
+            message: `情報を送信しました（${players.length}/${totalPlayers}人）残りのメンバーの送信を待っています。`
+          });
+        }
+
+        // --- 全員揃ったので一括計算を実行 ---
+        // 他プレイヤーのカード数の総数（other_cards_sum）が少ない順に並べ替えて順位を決定
+        players.sort((a, b) => a.other_cards_sum - b.other_cards_sum);
         players.forEach((p, idx) => { p.rank = idx + 1; });
-
-        const totalCardsAll = players.reduce((sum, p) => sum + p.cards, 0);
-        const totalBet = players.reduce((sum, p) => sum + p.bet, 0);
 
         const upperCount = (totalPlayers % 2 === 0) 
           ? (totalPlayers / 2) 
           : Math.floor((totalPlayers - 1) / 2);
+        
+        const drawRank = (totalPlayers % 2 !== 0) ? (upperCount + 1) : -1;
 
-        const shareOfPool = upperCount > 0 ? Math.floor((totalBet / upperCount) / 10) * 10 : 0;
+        let nonLastTotalChange = 0;
+        let changes = {};
 
-        let nonLastBaseSum = 0;
-        let basePoints = {};
-
+        // 1. 最下位以外を計算
         players.forEach(p => {
-          const otherCardsSum = totalCardsAll - p.cards;
-          let base = 0;
-
+          let change = 0;
           if (p.rank === totalPlayers) {
-            base = 0;
+            return; // 最下位は後で
           } else if (p.rank <= upperCount) {
-            base = Math.floor((otherCardsSum + (p.bet / 10)) * p.dice);
-          } else if (totalPlayers % 2 !== 0 && p.rank === upperCount + 1) {
-            base = 0;
+            // 上位の式: (残カード数 + (掛け金)/10)*サイコロの目 + (掛け金)/(プレイヤー数/2)
+            change = Math.floor((p.other_cards_sum + (p.bet / 10)) * p.dice + (p.bet / (totalPlayers / 2)));
+          } else if (p.rank === drawRank) {
+            // 奇数の真ん中順位
+            change = 0;
           } else {
-            base = -Math.floor(otherCardsSum * p.dice);
+            // 負け（最下位以外）: -(残カード数 * サイコロの目)
+            change = -Math.floor(p.other_cards_sum * p.dice);
           }
 
-          basePoints[p.username] = base;
-          if (p.rank !== totalPlayers) {
-            nonLastBaseSum += base;
-          }
+          changes[p.username] = change;
+          nonLastTotalChange += change;
         });
 
-        let myPointChange = 0;
-        let myRank = 1;
+        // 2. 最下位の計算（そのゲーム内での点数の増減をすべて合計し、その分をマイナス）
+        const lastPlayer = players.find(p => p.rank === totalPlayers);
+        if (lastPlayer) {
+          changes[lastPlayer.username] = -nonLastTotalChange;
+        }
 
+        // DBに反映（各ユーザーのscoreとlast_changeを更新）
+        let completedCount = 0;
         players.forEach(p => {
-          let finalChange = 0;
-          if (p.rank <= upperCount) {
-            finalChange = basePoints[p.username] + shareOfPool;
-          } else if (p.rank === totalPlayers) {
-            finalChange = -nonLastBaseSum;
-          } else {
-            finalChange = basePoints[p.username];
-          }
-
-          if (p.username === username) {
-            myPointChange = finalChange;
-            myRank = p.rank;
-          }
-        });
-
-        db.run('UPDATE users SET score = score + ? WHERE username = ?', [myPointChange, username], () => {
-          db.get('SELECT score FROM users WHERE username = ?', [username], (err, user) => {
-            res.json({
-              success: true,
-              rank: myRank,
-              totalPlayers: totalPlayers,
-              pointChange: myPointChange,
-              currentScore: user ? user.score : 100
-            });
+          const ptChange = changes[p.username];
+          db.run('UPDATE users SET score = score + ?, last_change = ? WHERE username = ?', [ptChange, ptChange, p.username], () => {
+            completedCount++;
+            if (completedCount === players.length) {
+              // 計算が終わったら提出データをクリアして完了を通知
+              db.run('DELETE FROM game_submissions WHERE game_id = ?', [game_id], () => {
+                res.json({
+                  success: true,
+                  status: 'completed',
+                  message: '全員のデータが揃い、点数が確定しました！ランキングで結果をご確認ください。'
+                });
+              });
+            }
           });
         });
       });
@@ -228,16 +224,16 @@ app.post('/game/submit', requireLogin, (req, res) => {
   });
 });
 
-// 総合 & アルファベット別ランキング
+// ランキング
 app.get('/ranking', requireLogin, (req, res) => {
   const prefixFilter = req.query.prefix || '';
 
-  db.all('SELECT username, score FROM users ORDER BY score DESC', [], (err, overallRanking) => {
+  db.all('SELECT username, score, last_change FROM users ORDER BY score DESC', [], (err, overallRanking) => {
     db.all('SELECT DISTINCT prefix FROM game_submissions', [], (err, prefixes) => {
       
       if (prefixFilter) {
         db.all(`
-          SELECT DISTINCT u.username, u.score 
+          SELECT DISTINCT u.username, u.score, u.last_change 
           FROM users u 
           JOIN game_submissions gs ON u.username = gs.username 
           WHERE gs.prefix = ? 
@@ -264,9 +260,8 @@ app.get('/ranking', requireLogin, (req, res) => {
   });
 });
 
-// 週末リセット
 app.post('/ranking/reset', requireLogin, (req, res) => {
-  db.run('UPDATE users SET score = 100', [], (err) => {
+  db.run('UPDATE users SET score = 100, last_change = 0', [], (err) => {
     if (err) return res.status(500).send('リセットに失敗しました');
     res.redirect('/ranking');
   });
