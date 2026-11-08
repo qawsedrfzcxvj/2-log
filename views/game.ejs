@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>大富豪2 - 自分の情報入力</title>
+  <title>大富豪2 - 情報入力</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -21,21 +21,16 @@
     </div>
 
     <div class="form-group">
-      <label>あなたの残りカード枚数 (上がった人は0)</label>
-      <input type="number" id="cards" min="0" value="0" required>
+      <label>残カード数 (他プレイヤーのカード数の総数 ※最下位は0)</label>
+      <input type="number" id="other_cards_sum" min="0" value="0" required>
     </div>
 
-    <button type="button" onclick="submitMyData()" class="btn">情報を送信して点数を計算する</button>
+    <button type="button" onclick="submitMyData()" class="btn">情報を送信する</button>
 
-    <!-- 結果表示エリア -->
-    <div id="resultArea" style="margin-top: 30px; display: none; background: #eef9f5; padding: 15px; border-radius: 6px;">
-      <h2 style="margin-top:0; color:#27ae60;">計算完了</h2>
-      <p style="font-size: 18px; margin: 5px 0;">今回の変動: <strong id="resChange"></strong></p>
-      <p style="font-size: 18px; margin: 5px 0;">現在の順位: <strong id="resRank"></strong></p>
-      <p style="font-size: 20px; margin: 10px 0 0 0; color:#2c3e50;">現在の所持ポイント: <strong id="resScore"></strong></p>
-    </div>
+    <div id="msgArea" style="margin-top: 20px; text-align: center; font-weight: bold; color: #2980b9;"></div>
 
-    <a href="/" class="btn btn-secondary" style="margin-top: 20px;">ダッシュボードに戻る</a>
+    <a href="/ranking" class="btn btn-secondary" style="margin-top: 20px;">ランキングで結果を確認する</a>
+    <a href="/" class="btn btn-secondary" style="margin-top: 10px;">ダッシュボードに戻る</a>
   </div>
 
   <script>
@@ -44,17 +39,17 @@
     async function submitMyData() {
       const bet = document.getElementById('bet').value;
       const dice = document.getElementById('dice').value;
-      const cards = document.getElementById('cards').value;
+      const other_cards_sum = document.getElementById('other_cards_sum').value;
 
-      if(cards === '') {
-        alert('残りカード枚数を入力してください');
+      if(other_cards_sum === '') {
+        alert('数値を入力してください');
         return;
       }
 
       const res = await fetch('/game/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ game_id: gameId, bet, dice, cards })
+        body: JSON.stringify({ game_id: gameId, bet, dice, other_cards_sum })
       });
 
       const data = await res.json();
@@ -63,12 +58,11 @@
         return;
       }
 
-      const sign = data.pointChange >= 0 ? '+' : '';
-      document.getElementById('resChange').innerText = `${sign}${data.pointChange} pt`;
-      document.getElementById('resRank').innerText = `${data.rank} 位 / ${data.totalPlayers} 人中`;
-      document.getElementById('resScore').innerText = `${data.currentScore} pt`;
-      
-      document.getElementById('resultArea').style.display = 'block';
+      document.getElementById('msgAreainnerText') = data.message;
+      alert(data.message);
+      if(data.status === 'completed') {
+        window.location.href = '/ranking';
+      }
     }
   </script>
 </body>
