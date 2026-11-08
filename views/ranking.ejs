@@ -9,7 +9,6 @@
   <div class="container">
     <h1>ランキング</h1>
 
-    <!-- プレフィックス（アルファベット）ごとの絞り込み -->
     <div style="text-align:center; margin-bottom: 20px;">
       <a href="/ranking" class="btn" style="width: auto; padding: 6px 12px; <%= !currentPrefix ? 'background:#2980b9;' : 'background:#95a5a6;' %>">総合ランキング</a>
       <% prefixes.forEach(p => { %>
@@ -20,28 +19,37 @@
     <% if (currentPrefix) { %>
       <h2>グループ 「<%= currentPrefix.toUpperCase() %>」 内ランキング</h2>
       <table>
-        <tr><th>順位</th><th>ユーザー名</th><th>所持ポイント</th></tr>
+        <tr><th>順位</th><th>ユーザー名</th><th>直近増減</th><th>所持ポイント</th></tr>
         <% if (filteredRanking && filteredRanking.length > 0) { %>
           <% filteredRanking.forEach((u, i) => { %>
-            <tr><td><%= i + 1 %></td><td><%= u.username %></td><td><%= u.score %> pt</td></tr>
+            <tr>
+              <td><%= i + 1 %></td>
+              <td><%= u.username %></td>
+              <td style="color: <%= u.last_change >= 0 ? 'green' : 'red' %>;"><%= u.last_change >= 0 ? '+' + u.last_change : u.last_change %> pt</td>
+              <td><%= u.score %> pt</td>
+            </tr>
           <% }); %>
         <% } else { %>
-          <tr><td colspan="3">データがありません</td></tr>
+          <tr><td colspan="4">データがありません</td></tr>
         <% } %>
       </table>
     <% } else { %>
       <h2>総合点数ランキング</h2>
       <table>
-        <tr><th>順位</th><th>ユーザー名</th><th>所持ポイント</th></tr>
+        <tr><th>順位</th><th>ユーザー名</th><th>直近増減</th><th>所持ポイント</th></tr>
         <% overallRanking.forEach((u, i) => { %>
-          <tr><td><%= i + 1 %></td><td><%= u.username %></td><td><%= u.score %> pt</td></tr>
+          <tr>
+            <td><%= i + 1 %></td>
+            <td><%= u.username %></td>
+            <td style="color: <%= u.last_change >= 0 ? 'green' : 'red' %>;"><%= u.last_change >= 0 ? '+' + u.last_change : u.last_change %> pt</td>
+            <td><%= u.score %> pt</td>
+          </tr>
         <% }); %>
       </table>
     <% } %>
 
     <div style="margin-top:30px; border-top: 1px solid #ccc; padding-top: 15px;">
       <h3>週末リセット</h3>
-      <p style="font-size:12px; color: #666;">全プレイヤーのポイントを100ptに戻します。</p>
       <form action="/ranking/reset" method="POST" onsubmit="return confirm('本当に全プレイヤーのポイントを100ptにリセットしますか？');">
         <button type="submit" class="btn btn-danger">点数を100ptにリセットする</button>
       </form>
