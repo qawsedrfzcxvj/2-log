@@ -8,7 +8,7 @@
 <body>
   <div class="container">
     <h1>ゲームルーム</h1>
-    <p style="text-align:center;">ゲームID: <strong id="displayGameId"><%= gameId %></strong></p>
+    <p style="text-align:center;">ゲームID: <strong><%= gameId %></strong></p>
 
     <div class="form-group">
       <label>掛け金 (10pt以上、10pt刻み)</label>
@@ -21,78 +21,40 @@
     </div>
 
     <div class="form-group">
-      <label>あなたの上がり順位 (1〜)</label>
-      <input type="number" id="rank" min="1" placeholder="例: 1" required>
-    </div>
-
-    <div class="form-group">
       <label>あなたの残りカード枚数 (上がった人は0)</label>
       <input type="number" id="cards" min="0" value="0" required>
     </div>
 
-    <button type="button" onclick="submitMyData()" class="btn">自分の情報を送信・保存する</button>
+    <button type="button" onclick="submitMyData()" class="btn">情報を送信して点数を計算する</button>
 
-    <hr style="margin: 30px 0;">
-
-    <h2>同じゲームIDの参加状況</h2>
-    <div id="participantsArea">読み込み中...</div>
-
-    <button type="button" onclick="calculateGame()" class="btn btn-secondary" style="background: #27ae60; margin-top: 15px;">全員揃ったら点数を計算して確定する</button>
-
-    <div id="resultArea" style="margin-top: 20px;"></div>
+    <!-- 結果表示エリア -->
+    <div id="resultArea" style="margin-top: 30px; display: none; background: #eef9f5; padding: 15px; border-radius: 6px;">
+      <h2 style="margin-top:0; color:#27ae60;">計算完了</h2>
+      <p style="font-size: 18px; margin: 5px 0;">今回の変動: <strong id="resChange"></strong></p>
+      <p style="font-size: 18px; margin: 5px 0;">現在の順位: <strong id="resRank"></strong></p>
+      <p style="font-size: 20px; margin: 10px 0 0 0; color:#2c3e50;">現在の所持ポイント: <strong id="resScore"></strong></p>
+    </div>
 
     <a href="/" class="btn btn-secondary" style="margin-top: 20px;">ダッシュボードに戻る</a>
   </div>
 
   <script>
     const gameId = "<%= gameId %>";
-    const myName = "<%= username %>";
-
-    async function fetchStatus() {
-      const res = await fetch(`/game/status?game_id=${encodeURIComponent(gameId)}`);
-      const data = await res.json();
-      
-      if(data.submissions) {
-        let html = '<table><tr><th>プレイヤー名</th><th>順位</th><th>残りカード</th><th>提出状況</th></tr>';
-        data.submissions.forEach(s => {
-          html += `<tr><td>${s.username}</td><td>${s.rank}位</td><td>${s.cards}枚</td><td>✅ 提出済み</td></tr>`;
-        });
-        html += '</table>';
-        document.getElementById('participantsArea').innerHTML = html;
-      }
-    }
 
     async function submitMyData() {
       const bet = document.getElementById('bet').value;
       const dice = document.getElementById('dice').value;
-      const rank = document.getElementById('rank').value;
       const cards = document.getElementById('cards').value;
 
-      if(!rank || !cards) {
-        alert('順位と残りカード枚数を入力してください');
+      if(cards === '') {
+        alert('残りカード枚数を入力してください');
         return;
       }
 
       const res = await fetch('/game/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ game_id: gameId, bet, dice, rank, cards })
-      });
-
-      const data = await res.json();
-      if(data.error) {
-        alert(data.error);
-      } else {
-        alert('自分の情報を送信しました！');
-        fetchStatus();
-      }
-    }
-
-    async function calculateGame() {
-      const res = await fetch('/game/calculate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ game_id: gameId })
+        body: JSON.stringify({ game_id: gameId, bet, dice, cards })
       });
 
       const data = await res.json();
@@ -101,17 +63,13 @@
         return;
       }
 
-      let html = '<h2>【計算結果（ポイント反映完了）】</h2><table><tr><th>順位</th><th>ユーザー名</th><th>変動ポイント</th></tr>';
-      data.results.sort((a,b) => a.rank - b.rank).forEach(r => {
-        const sign = r.pointChange >= 0 ? '+' : '';
-        html += `<tr><td>${r.rank}位</td><td>${r.username}</td><td>${sign}${r.pointChange} pt</td></tr>`;
-      });
-      html += '</table>';
-      document.getElementById('resultArea').innerHTML = html;
+      const sign = data.pointChange >= 0 ? '+' : '';
+      document.getElementById('resChange').innerText = `${sign}${data.pointChange} pt`;
+      document.getElementById('resRank').innerText = `${data.rank} 位 / ${data.totalPlayers} 人中`;
+      document.getElementById('resScore').innerText = `${data.currentScore} pt`;
+      
+      document.getElementById('resultArea').style.display = 'block';
     }
-
-    // 初回読み込み
-    fetchStatus();
   </script>
 </body>
 </html>
