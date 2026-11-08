@@ -16,7 +16,7 @@ body {
 h1, h2 { text-align: center; color: #2c3e50; }
 .form-group { margin-bottom: 15px; }
 label { display: block; margin-bottom: 5px; font-weight: bold; }
-input[type="text"], input[type="password"], input[type="number"] {
+input[type="text"], input[type="password"], input[type="number"], select {
   width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;
 }
 button, .btn {
@@ -28,8 +28,8 @@ button:hover, .btn:hover { background: #2980b9; }
 .btn-danger:hover { background: #c0392b; }
 .btn-secondary { background: #95a5a6; }
 .btn-secondary:hover { background: #7f8c8d; }
-.player-row { border-bottom: 1px solid #eee; padding: 10px 0; }
 .error { color: #e74c3c; text-align: center; font-weight: bold; }
 table { width: 100%; border-collapse: collapse; margin-top: 20px; }
 th, td { padding: 10px; border: 1px solid #ddd; text-align: center; }
 th { background-color: #f8f9fa; }
+.tag { display: inline-block; padding: 4px 8px; background: #e0f7fa; color: #00796b; border-radius: 4px; font-size: 14px; margin-bottom: 15px; }
