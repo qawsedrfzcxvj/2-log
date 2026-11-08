@@ -2,13 +2,13 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>大富豪2 - 点数計算</title>
+  <title>大富豪2 - 自分の情報入力</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div class="container">
-    <h1>点数計算・記録</h1>
-    <p>ゲームID: <strong><%= gameId %></strong></p>
+    <h1>ゲームルーム</h1>
+    <p style="text-align:center;">ゲームID: <strong id="displayGameId"><%= gameId %></strong></p>
 
     <div class="form-group">
       <label>掛け金 (10pt以上、10pt刻み)</label>
@@ -20,13 +20,24 @@
       <input type="number" id="dice" value="7" min="2" max="12">
     </div>
 
-    <h2>参加プレイヤー情報</h2>
-    <div id="playersContainer">
-      <!-- プレイヤー追加エリア -->
+    <div class="form-group">
+      <label>あなたの上がり順位 (1〜)</label>
+      <input type="number" id="rank" min="1" placeholder="例: 1" required>
     </div>
-    <button type="button" onclick="addPlayerRow()" class="btn-secondary" style="margin-bottom: 15px;">＋ プレイヤーを追加</button>
 
-    <button type="button" onclick="calculateAndSave()">点数を計算して記録する</button>
+    <div class="form-group">
+      <label>あなたの残りカード枚数 (上がった人は0)</label>
+      <input type="number" id="cards" min="0" value="0" required>
+    </div>
+
+    <button type="button" onclick="submitMyData()" class="btn">自分の情報を送信・保存する</button>
+
+    <hr style="margin: 30px 0;">
+
+    <h2>同じゲームIDの参加状況</h2>
+    <div id="participantsArea">読み込み中...</div>
+
+    <button type="button" onclick="calculateGame()" class="btn btn-secondary" style="background: #27ae60; margin-top: 15px;">全員揃ったら点数を計算して確定する</button>
 
     <div id="resultArea" style="margin-top: 20px;"></div>
 
@@ -34,53 +45,54 @@
   </div>
 
   <script>
-    let playerCount = 0;
+    const gameId = "<%= gameId %>";
+    const myName = "<%= username %>";
 
-    function addPlayerRow() {
-      playerCount++;
-      const div = document.createElement('div');
-      div.className = 'player-row';
-      div.innerHTML = `
-        <label>プレイヤー ${playerCount}</label>
-        <input type="text" placeholder="ユーザー名" class="p-name" required style="margin-bottom:5px;">
-        <input type="number" placeholder="上がり順位 (1〜)" class="p-rank" min="1" style="margin-bottom:5px;">
-        <input type="number" placeholder="残りカード枚数 (上がった人は0)" class="p-cards" min="0" value="0">
-      `;
-      document.getElementById('playersContainer').appendChild(div);
+    async function fetchStatus() {
+      const res = await fetch(`/game/status?game_id=${encodeURIComponent(gameId)}`);
+      const data = await res.json();
+      
+      if(data.submissions) {
+        let html = '<table><tr><th>プレイヤー名</th><th>順位</th><th>残りカード</th><th>提出状況</th></tr>';
+        data.submissions.forEach(s => {
+          html += `<tr><td>${s.username}</td><td>${s.rank}位</td><td>${s.cards}枚</td><td>✅ 提出済み</td></tr>`;
+        });
+        html += '</table>';
+        document.getElementById('participantsArea').innerHTML = html;
+      }
     }
 
-    // 最初は4人分デフォルト生成
-    for(let i=0; i<4; i++) addPlayerRow();
-
-    async function calculateAndSave() {
+    async function submitMyData() {
       const bet = document.getElementById('bet').value;
       const dice = document.getElementById('dice').value;
-      const names = document.querySelectorAll('.p-name');
-      const ranks = document.querySelectorAll('.p-rank');
-      const cards = document.querySelectorAll('.p-cards');
+      const rank = document.getElementById('rank').value;
+      const cards = document.getElementById('cards').value;
 
-      const players_data = [];
-      for(let i=0; i<names.length; i++) {
-        if(!names[i].value || !ranks[i].value) {
-          alert('すべてのプレイヤー名と順位を入力してください');
-          return;
-        }
-        players_data.push({
-          username: names[i].value.trim(),
-          rank: parseInt(ranks[i].value, 10),
-          cards: parseInt(cards[i].value, 10) || 0
-        });
+      if(!rank || !cards) {
+        alert('順位と残りカード枚数を入力してください');
+        return;
       }
 
+      const res = await fetch('/game/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game_id: gameId, bet, dice, rank, cards })
+      });
+
+      const data = await res.json();
+      if(data.error) {
+        alert(data.error);
+      } else {
+        alert('自分の情報を送信しました！');
+        fetchStatus();
+      }
+    }
+
+    async function calculateGame() {
       const res = await fetch('/game/calculate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          game_id: '<%= gameId %>',
-          bet: bet,
-          dice: dice,
-          players_data: JSON.stringify(players_data)
-        })
+        body: JSON.stringify({ game_id: gameId })
       });
 
       const data = await res.json();
@@ -89,7 +101,7 @@
         return;
       }
 
-      let html = '<h2>計算結果（更新完了）</h2><table><tr><th>順位</th><th>ユーザー名</th><th>変動ポイント</th></tr>';
+      let html = '<h2>【計算結果（ポイント反映完了）】</h2><table><tr><th>順位</th><th>ユーザー名</th><th>変動ポイント</th></tr>';
       data.results.sort((a,b) => a.rank - b.rank).forEach(r => {
         const sign = r.pointChange >= 0 ? '+' : '';
         html += `<tr><td>${r.rank}位</td><td>${r.username}</td><td>${sign}${r.pointChange} pt</td></tr>`;
@@ -97,6 +109,9 @@
       html += '</table>';
       document.getElementById('resultArea').innerHTML = html;
     }
+
+    // 初回読み込み
+    fetchStatus();
   </script>
 </body>
 </html>
