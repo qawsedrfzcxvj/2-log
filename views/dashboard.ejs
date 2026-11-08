@@ -11,18 +11,18 @@
     <p style="text-align:center; font-size:18px;">現在の所持ポイント: <strong><%= score %> pt</strong></p>
     
     <div style="margin-top: 30px;">
-      <h2>ゲームを開始する</h2>
+      <h2>ゲームに参加する</h2>
       <form action="/game" method="GET">
         <div class="form-group">
-          <label>ゲームIDを入力</label>
-          <input type="text" name="game_id" placeholder="例: game-1234" required>
+          <label>ゲームIDを入力 (例: a 1 または a1)</label>
+          <input type="text" name="game_id" placeholder="例: a 1" required>
         </div>
-        <button type="submit">ゲーム記録画面へ</button>
+        <button type="submit">ゲーム画面へ</button>
       </form>
     </div>
 
     <div style="margin-top: 30px;">
-      <a href="/ranking" class="btn btn-secondary">総合ランキングを見る</a>
+      <a href="/ranking" class="btn btn-secondary">総合・グループ別ランキングを見る</a>
       <a href="/logout" class="btn btn-danger" style="margin-top:10px;">ログアウト</a>
     </div>
   </div>
