@@ -14,8 +14,8 @@
       <h2>ゲームに参加する</h2>
       <form action="/game" method="GET">
         <div class="form-group">
-          <label>ゲームIDを入力 (例: a 1 または a1)</label>
-          <input type="text" name="game_id" placeholder="例: a 1" required>
+          <label>ゲームIDを入力 (例: s5)</label>
+          <input type="text" name="game_id" placeholder="例: s5" required>
         </div>
         <button type="submit">ゲーム画面へ</button>
       </form>
@@ -23,7 +23,12 @@
 
     <div style="margin-top: 30px;">
       <a href="/ranking" class="btn btn-secondary">総合・グループ別ランキングを見る</a>
-      <a href="/logout" class="btn btn-danger" style="margin-top:10px;">ログアウト</a>
+      <a href="/logout" class="btn btn-secondary" style="margin-top:10px; background: #7f8c8d;">ログアウト</a>
+      
+      <!-- アカウント削除機能 -->
+      <form action="/account/delete" method="POST" onsubmit="return confirm('本当にアカウントを削除しますか？この操作は元に戻せません。');" style="margin-top: 15px;">
+        <button type="submit" class="btn btn-danger">アカウントを削除する</button>
+      </form>
     </div>
   </div>
 </body>
