@@ -1,274 +1,167 @@
 const express = require('express');
-const session = require('express-session');
 const sqlite3 = require('sqlite3').verbose();
-const bcrypt = require('bcrypt');
-const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const ADMIN_USER = process.env.ADMIN_USER || 'admin';
+const ADMIN_PASS = process.env.ADMIN_PASS || 'password123';
 
-const db = new sqlite3.Database('./database.db');
+app.use(express.json());
+
+const db = new sqlite3.Database('./scores.db');
 
 db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
-      score INTEGER DEFAULT 100,
-      last_change INTEGER DEFAULT 0
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS game_submissions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      game_id TEXT NOT NULL,
-      prefix TEXT NOT NULL,
-      username TEXT NOT NULL,
-      bet INTEGER NOT NULL,
-      dice INTEGER NOT NULL,
-      other_cards_sum INTEGER NOT NULL,
-      UNIQUE(game_id, username)
-    )
-  `);
+  db.run(`CREATE TABLE IF NOT EXISTS users (name TEXT PRIMARY KEY, points INTEGER DEFAULT 100, cards INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1)`);
+  db.run(`CREATE TABLE IF NOT EXISTS round_submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)`);
 });
 
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-app.set('view engine', 'ejs');
+const verifyAdmin = (req, res, next) => {
+  const { adminUser, adminPass } = req.body;
+  if (adminUser === ADMIN_USER && adminPass === ADMIN_PASS) next();
+  else res.status(403).json({ error: '認証失敗' });
+};
 
-app.use(session({
-  secret: 'daifugo2_secret_key',
-  resave: false,
-  saveUninitialized: false
-}));
+app.post('/api/admin/verify', verifyAdmin, (req, res) => res.json({ success: true }));
+app.get('/api/users', (req, res) => db.all(`SELECT * FROM users`, [], (err, rows) => res.json(rows)));
+app.get('/api/ranking', (req, res) => db.all(`SELECT * FROM users WHERE is_active = 1 ORDER BY points DESC`, [], (err, rows) => res.json(rows)));
+app.get('/api/submissions', (req, res) => db.all(`SELECT name FROM round_submissions ORDER BY timestamp ASC`, [], (err, rows) => res.json(rows)));
 
-function requireLogin(req, res, next) {
-  if (!req.session.userId) {
-    return res.redirect('/login');
-  }
-  next();
-}
-
-app.get('/login', (req, res) => {
-  res.render('login', { error: null });
+app.post('/api/admin/add-user', verifyAdmin, (req, res) => {
+  const { name, cards } = req.body;
+  if (!name) return res.status(400).json({ error: '名前必須' });
+  db.run(`INSERT INTO users (name, points, cards, is_active) VALUES (?, 100, ?, 1) ON CONFLICT(name) DO UPDATE SET cards = ?`, [name.trim(), Number(cards)||0, Number(cards)||0], () => res.json({ success: true }));
 });
 
-app.post('/login', async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.render('login', { error: 'ユーザー名とパスワードを入力してください' });
-  }
-
-  db.get('SELECT * FROM users WHERE username = ?', [username], async (err, user) => {
-    if (err) return res.render('login', { error: 'DBエラーが発生しました' });
-
-    if (user) {
-      const match = await bcrypt.compare(password, user.password);
-      if (match) {
-        req.session.userId = user.id;
-        req.session.username = user.username;
-        return res.redirect('/');
-      } else {
-        return res.render('login', { error: 'パスワードが違います' });
-      }
-    } else {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      db.run('INSERT INTO users (username, password, score, last_change) VALUES (?, ?, 100, 0)', [username, hashedPassword], function (err) {
-        if (err) return res.render('login', { error: '登録に失敗しました' });
-        req.session.userId = this.lastID;
-        req.session.username = username;
-        return res.redirect('/');
-      });
-    }
-  });
+app.post('/api/admin/toggle-active', verifyAdmin, (req, res) => {
+  db.run(`UPDATE users SET is_active = ? WHERE name = ?`, [req.body.isActive ? 1 : 0, req.body.name], () => res.json({ success: true }));
 });
 
-app.get('/logout', (req, res) => {
-  req.session.destroy();
-  res.redirect('/login');
+app.post('/api/admin/reset-user', verifyAdmin, (req, res) => {
+  db.run(`UPDATE users SET points = 100 WHERE name = ?`, [req.body.targetName], () => res.json({ success: true }));
 });
 
-// アカウント削除機能
-app.post('/account/delete', requireLogin, (req, res) => {
-  const username = req.session.username;
+app.post('/api/admin/reset-all', verifyAdmin, (req, res) => {
   db.serialize(() => {
-    db.run('DELETE FROM users WHERE username = ?', [username]);
-    db.run('DELETE FROM game_submissions WHERE username = ?', [username]);
+    db.run(`UPDATE users SET points = 100`);
+    db.run(`DELETE FROM round_submissions`, () => res.json({ success: true }));
   });
-  req.session.destroy(() => {
-    res.redirect('/login');
+});
+
+app.post('/api/submit-round', (req, res) => {
+  const { name } = req.body;
+  db.get(`SELECT name FROM round_submissions WHERE name = ?`, [name], (err, row) => {
+    if (row) return res.status(400).json({ error: '入力済です' });
+    db.run(`INSERT INTO round_submissions (name) VALUES (?)`, [name], () => res.json({ success: true }));
+  });
+});
+
+app.post('/api/admin/execute-round', verifyAdmin, (req, res) => {
+  const { a, b, c, dice } = req.body;
+  db.all(`SELECT name FROM round_submissions ORDER BY timestamp ASC`, [], (err, subs) => {
+    if (!subs.length) return res.status(400).json({ error: '入力者なし' });
+    db.all(`SELECT * FROM users`, [], (err, allUsers) => {
+      const userMap = {};
+      allUsers.forEach(u => userMap[u.name] = { ...u });
+      const totalCards = allUsers.reduce((s, u) => s + u.cards, 0);
+      const N = subs.length;
+      const halfN = Math.floor(N / 2);
+      const isOdd = N % 2 !== 0;
+
+      subs.forEach((sub, i) => {
+        if (!userMap[sub.name]) return;
+        if (!(isOdd && i === Math.floor(N / 2))) {
+          if (i < halfN) userMap[sub.name].points += (Number(c) + Number(b) / 10) * Number(a);
+          else userMap[sub.name].points -= (totalCards - userMap[sub.name].cards) * Number(dice);
+        }
+      });
+
+      const list = Object.values(userMap);
+      if (list.length) {
+        const minPt = Math.min(...list.map(u => u.points));
+        const minNames = list.filter(u => u.points === minPt).map(u => u.name);
+        const sumNonMin = list.filter(u => !minNames.includes(u.name)).reduce((s, u) => s + u.points, 0);
+        minNames.forEach(n => userMap[n].points -= sumNonMin);
+      }
+
+      db.serialize(() => {
+        Object.values(userMap).forEach(u => db.run(`UPDATE users SET points = ? WHERE name = ?`, [u.points, u.name]));
+        db.run(`DELETE FROM round_submissions`, () => res.json({ success: true }));
+      });
+    });
   });
 });
 
 app.get('/', (req, res) => {
-  if (!req.session.userId) {
-    return res.render('login', { error: null });
+  res.send(`<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="UTF-8"><title>ランキング</title><style>body{font-family:sans-serif;max-width:600px;margin:20px auto;padding:0 10px;}table{width:100%;border-collapse:collapse;margin:10px 0;}th,td{border:1px solid #ccc;padding:6px;text-align:left;}input,select,button{padding:5px;margin:3px 0;}.admin{background:#eee;padding:10px;margin-top:20px;}.hidden{display:none;}</style></head>
+<body>
+  <h2>プレイヤー入力</h2>
+  <select id="us"></select> <button onclick="sub()">入力確定</button>
+  <p>入力順: <span id="sub-list"></span></p>
+
+  <h2>ランキング</h2>
+  <table><thead><tr><th>順位</th><th>名前</th><th>Pt</th><th>カード</th><th class="ac hidden">操作</th></tr></thead><tbody id="rank"></tbody></table>
+
+  <div class="admin">
+    <h3>管理者</h3>
+    <div id="alog"><input id="au" placeholder="ID"><input type="password" id="ap" placeholder="Pass"><button onclick="login()">認証</button></div>
+    <div id="actrl" class="hidden">
+      <input id="nn" placeholder="名前"><input id="nc" type="number" placeholder="カード" value="0"><button onclick="addU()">追加/更新</button><br>
+      <table><thead><tr><th>名前</th><th>Pt</th><th>カード</th><th>掲載</th><th>操作</th></tr></thead><tbody id="alist"></tbody></table>
+      変数a:<input id="va" type="number"> b:<input id="vb" type="number"> c:<input id="vc" type="number"> サイコロ:<input id="vd" type="number">
+      <button onclick="execR()">ラウンド計算実行</button><br>
+      <button onclick="resetA()" style="background:red;color:white;">全初期化</button> <button onclick="logout()">ログアウト</button>
+    </div>
+  </div>
+<script>
+let cred = null;
+async function load() {
+  const [r, u, s] = await Promise.all([fetch('/api/ranking').then(x=>x.json()), fetch('/api/users').then(x=>x.json()), fetch('/api/submissions').then(x=>x.json())]);
+  document.getElementById('us').innerHTML = u.map(x=>\`<option value="\${x.name}">\${x.name}</option>\`).join('');
+  document.getElementById('rank').innerHTML = r.map((x,i)=>\`<tr><td>\${i+1}位</td><td>\${x.name}</td><td>\${x.points}</td><td>\${x.cards}</td>\${cred?\`<td><button onclick="resU('\${x.name}')">初期化</button></td>\`:\'\'}</tr>\`).join('');
+  document.getElementById('sub-list').textContent = s.map(x=>x.name).join(' -> ');
+  if(cred) {
+    document.getElementById('alist').innerHTML = u.map(x=>\`<tr><td>\${x.name}</td><td>\${x.points}</td><td>\${x.cards}</td><td><input type="checkbox" \${x.is_active?'checked':\'\'} onchange="toggle(\'\${x.name}\',this.checked)"></td><td><button onclick="resU('\${x.name}')">初期化</button></td></tr>\`).join('');
   }
-  db.get('SELECT score FROM users WHERE id = ?', [req.session.userId], (err, user) => {
-    res.render('dashboard', { username: req.session.username, score: user ? user.score : 100 });
-  });
+}
+async function sub() {
+  const res = await fetch('/api/submit-round', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:document.getElementById('us').value})});
+  if(res.ok) load(); else alert((await res.json()).error);
+}
+async function login() {
+  const adminUser = document.getElementById('au').value, adminPass = document.getElementById('ap').value;
+  const res = await fetch('/api/admin/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({adminUser, adminPass})});
+  if(res.ok) { cred = {adminUser, adminPass}; document.getElementById('alog').classList.add('hidden'); document.getElementById('actrl').classList.remove('hidden'); document.querySelectorAll('.ac').forEach(el=>el.classList.remove('hidden')); load(); }
+  else alert('失敗');
+}
+function logout() { cred = null; document.getElementById('actrl').classList.add('hidden'); document.getElementById('alog').classList.remove('hidden'); document.querySelectorAll('.ac').forEach(el=>el.classList.add('hidden')); load(); }
+async function addU() {
+  await fetch('/api/admin/add-user', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...cred, name:document.getElementById('nn').value, cards:document.getElementById('nc').value})});
+  load();
+}
+async function toggle(name, isActive) {
+  await fetch('/api/admin/toggle-active', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...cred, name, isActive})});
+  load();
+}
+async function resU(targetName) {
+  if(!confirm('初期化しますか？'))return;
+  await fetch('/api/admin/reset-user', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...cred, targetName})});
+  load();
+}
+async function resetA() {
+  if(!confirm('全初期化しますか？'))return;
+  await fetch('/api/admin/reset-all', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cred)});
+  load();
+}
+async function execR() {
+  const res = await fetch('/api/admin/execute-round', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...cred, a:document.getElementById('va').value, b:document.getElementById('vb').value, c:document.getElementById('vc').value, dice:document.getElementById('vd').value})});
+  if(res.ok) { alert('完了'); load(); } else alert((await res.json()).error);
+}
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>`);
 });
 
-app.get('/game', requireLogin, (req, res) => {
-  const gameId = req.query.game_id || '';
-  res.render('game', { gameId, username: req.session.username });
-});
-
-app.post('/game/submit', requireLogin, (req, res) => {
-  const { game_id, bet, dice, other_cards_sum } = req.body;
-  const username = req.session.username;
-
-  if (!game_id) return res.status(400).json({ error: 'ゲームIDを入力してください' });
-
-  db.get('SELECT score FROM users WHERE username = ?', [username], (err, currentUser) => {
-    if (err || !currentUser) return res.status(400).json({ error: 'ユーザー情報が見つかりません' });
-
-    if (currentUser.score <= 0) {
-      return res.status(400).json({ error: '持ち点が0以下のため参加できません' });
-    }
-
-    const betNum = parseInt(bet, 10);
-    const diceNum = parseInt(dice, 10);
-    const cardsNum = parseInt(other_cards_sum, 10);
-
-    if (isNaN(betNum) || betNum < 10 || betNum % 10 !== 0) {
-      return res.status(400).json({ error: '掛け金は10pt以上、10pt刻みで入力してください' });
-    }
-
-    if (betNum > currentUser.score) {
-      return res.status(400).json({ error: `掛け金は現在の持ち点（${currentUser.score}pt）以下にしてください` });
-    }
-
-    const prefixMatch = game_id.trim().match(/^[a-zA-Z]+/);
-    const numberMatch = game_id.trim().match(/\d+$/);
-    
-    const prefix = prefixMatch ? prefixMatch[0].toLowerCase() : 'other';
-    const totalPlayers = numberMatch ? parseInt(numberMatch[0], 10) : 4;
-
-    db.run(`
-      INSERT INTO game_submissions (game_id, prefix, username, bet, dice, other_cards_sum)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(game_id, username) 
-      DO UPDATE SET bet=excluded.bet, dice=excluded.dice, other_cards_sum=excluded.other_cards_sum
-    `, [game_id, prefix, username, betNum, diceNum, cardsNum], (err) => {
-      if (err) {
-        return res.status(500).json({ error: '保存に失敗しました' });
-      }
-
-      db.all('SELECT * FROM game_submissions WHERE game_id = ?', [game_id], (err, players) => {
-        if (err) return res.status(400).json({ error: 'データ取得エラー' });
-
-        if (players.length < totalPlayers) {
-          return res.json({
-            success: true,
-            status: 'waiting',
-            message: `情報を送信しました（${players.length}/${totalPlayers}人）残りのメンバーの送信を待っています。`
-          });
-        }
-
-        players.sort((a, b) => a.other_cards_sum - b.other_cards_sum);
-        players.forEach((p, idx) => { p.rank = idx + 1; });
-
-        const upperCount = (totalPlayers % 2 === 0) 
-          ? (totalPlayers / 2) 
-          : Math.floor((totalPlayers - 1) / 2);
-        
-        const drawRank = (totalPlayers % 2 !== 0) ? (upperCount + 1) : -1;
-
-        let nonLastTotalChange = 0;
-        let changes = {};
-
-        players.forEach(p => {
-          let change = 0;
-          if (p.rank === totalPlayers) {
-            return;
-          } else if (p.rank <= upperCount) {
-            change = Math.floor((p.other_cards_sum + (p.bet / 10)) * p.dice + (p.bet / (totalPlayers / 2)));
-          } else if (p.rank === drawRank) {
-            change = 0;
-          } else {
-            change = -Math.floor(p.other_cards_sum * p.dice);
-          }
-
-          changes[p.username] = change;
-          nonLastTotalChange += change;
-        });
-
-        const lastPlayer = players.find(p => p.rank === totalPlayers);
-        if (lastPlayer) {
-          changes[lastPlayer.username] = -nonLastTotalChange;
-        }
-
-        let completedCount = 0;
-        players.forEach(p => {
-          const ptChange = changes[p.username];
-          db.run('UPDATE users SET score = score + ?, last_change = ? WHERE username = ?', [ptChange, ptChange, p.username], () => {
-            completedCount++;
-            if (completedCount === players.length) {
-              db.run('DELETE FROM game_submissions WHERE game_id = ?', [game_id], () => {
-                res.json({
-                  success: true,
-                  status: 'completed',
-                  message: '全員のデータが揃い、点数が確定しました！ランキング画面へ移動します...'
-                });
-              });
-            }
-          });
-        });
-      });
-    });
-  });
-});
-
-app.get('/ranking', requireLogin, (req, res) => {
-  const prefixFilter = req.query.prefix || '';
-
-  db.all('SELECT username, score, last_change FROM users ORDER BY score DESC', [], (err, overallRanking) => {
-    db.all('SELECT DISTINCT prefix FROM game_submissions', [], (err, prefixes) => {
-      
-      if (prefixFilter) {
-        db.all(`
-          SELECT DISTINCT u.username, u.score, u.last_change 
-          FROM users u 
-          JOIN game_submissions gs ON u.username = gs.username 
-          WHERE gs.prefix = ? 
-          ORDER BY u.score DESC
-        `, [prefixFilter], (err, fRows) => {
-          res.render('ranking', {
-            overallRanking,
-            filteredRanking: fRows,
-            prefixes: prefixes ? prefixes.map(p => p.prefix) : [],
-            currentPrefix: prefixFilter,
-            username: req.session.username
-          });
-        });
-      } else {
-        res.render('ranking', {
-          overallRanking,
-          filteredRanking: null,
-          prefixes: prefixes ? prefixes.map(p => p.prefix) : [],
-          currentPrefix: '',
-          username: req.session.username
-        });
-      }
-    });
-  });
-});
-
-// ランキングリセット（石田のみ実行可能）
-app.post('/ranking/reset', requireLogin, (req, res) => {
-  if (req.session.username !== '石田') {
-    return res.status(403).send('リセット権限はプレイヤー名「石田」のみに制限されています。');
-  }
-  db.run('UPDATE users SET score = 100, last_change = 0', [], (err) => {
-    if (err) return res.status(500).send('リセットに失敗しました');
-    res.redirect('/ranking');
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
