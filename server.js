@@ -13,18 +13,28 @@ const DATA_FILE = './data.json';
 
 // 初期データ構造
 let state = {
-  users: {}, // { username: { points: 0 } }
+  users: {}, 
   game: {
-    status: 'waiting', // 'waiting' | 'playing'
+    status: 'waiting',
     targetCount: 4,
-    participants: [], // [username1, username2, ...]
-    inputs: {}        // { username: { a: 順位, b: 枚数, c: サイコロ } }
+    participants: [],
+    inputs: {}
   }
 };
 
-// 起動時にデータ読み込み
+// 起動時にデータ読み込み（エラーや空ファイル対策を追加）
 if (fs.existsSync(DATA_FILE)) {
-  try { state = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch (e) {}
+  try {
+    const fileContent = fs.readFileSync(DATA_FILE, 'utf8');
+    if (fileContent.trim()) {
+      const parsed = JSON.parse(fileContent);
+      // 必要なプロパティが欠けている場合に備えてマージ
+      state.users = parsed.users || {};
+      state.game = parsed.game || state.game;
+    }
+  } catch (e) {
+    console.log('data.jsonの読み込みに失敗したため、初期状態から開始します。');
+  }
 }
 
 function saveAndBroadcast() {
@@ -32,10 +42,4 @@ function saveAndBroadcast() {
   io.emit('stateUpdate', state);
 }
 
-io.on('connection', (socket) => {
-  socket.emit('stateUpdate', state);
-
-  // アカウント登録・ログイン
-  socket.on('login', (username) => {
-    if (!username) return;
-    if (!state.users…
+io.on('connection', (socket) => …
