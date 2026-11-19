@@ -11,9 +11,8 @@ app.use(express.static('public'));
 
 const DATA_FILE = './data.json';
 
-// 初期データ構造
 let state = {
-  users: {}, 
+  users: {},
   game: {
     status: 'waiting',
     targetCount: 4,
@@ -22,18 +21,16 @@ let state = {
   }
 };
 
-// 起動時にデータ読み込み（エラーや空ファイル対策を追加）
 if (fs.existsSync(DATA_FILE)) {
   try {
     const fileContent = fs.readFileSync(DATA_FILE, 'utf8');
     if (fileContent.trim()) {
       const parsed = JSON.parse(fileContent);
-      // 必要なプロパティが欠けている場合に備えてマージ
       state.users = parsed.users || {};
       state.game = parsed.game || state.game;
     }
   } catch (e) {
-    console.log('data.jsonの読み込みに失敗したため、初期状態から開始します。');
+    console.log('data.json load error');
   }
 }
 
@@ -53,7 +50,8 @@ io.on('connection', (socket) => {
     saveAndBroadcast();
   });
 
-  socket.on('startGame', ({ targetCount }) => {
+  socket.on('startGame', ({ username, targetCount }) => {
+    if (username !== 'ad') return;
     state.game = {
       status: 'playing',
       targetCount: Number(targetCount) || 2,
@@ -82,7 +80,8 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('adminAction', ({ type, targetUser, amount }) => {
+  socket.on('adminAction', ({ username, type, targetUser, amount }) => {
+    if (username !== 'ad') return;
     if (type === 'resetAll') {
       Object.keys(state.users).forEach(u => state.users[u].points = 0);
       state.game.status = 'waiting';
@@ -107,7 +106,6 @@ function calculateScores() {
     if (index < half) {
       state.users[username].points += delta;
     } else if (isOdd && index === half) {
-      // 奇数時の真ん中は増減なし
     } else {
       state.users[username].points -= delta;
     }
