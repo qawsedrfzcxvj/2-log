@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>大富豪2</title>
+  <title>テーブルゲーム点数計算</title>
   <style>
     body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 0 15px; line-height: 1.5; }
     .box { border: 1px solid #ccc; padding: 15px; margin-bottom: 15px; border-radius: 5px; }
@@ -16,14 +16,6 @@
 </head>
 <body>
 
-  <div id="rankingBox" class="box">
-    <h3>ランキング</h3>
-    <table>
-      <thead><tr><th>順位</th><th>プレイヤー名</th><th>所持ポイント</th><th id="banHeader" class="hidden">管理</th></tr></thead>
-      <tbody id="rankingBody"></tbody>
-    </table>
-  </div>
-
   <div id="loginBox" class="box">
     <h2>プレイヤーログイン / 新規登録</h2>
     <input type="text" id="usernameInput" placeholder="プレイヤー名を入力">
@@ -32,6 +24,14 @@
 
   <div id="mainApp" class="hidden">
     <p>ログイン中: <strong id="currentUserDisplay"></strong> <button onclick="logout()">ログアウト</button></p>
+
+    <div id="rankingBox" class="box hidden">
+      <h3>🏆 所持ポイントランキング</h3>
+      <table>
+        <thead><tr><th>順位</th><th>プレイヤー名</th><th>所持ポイント</th><th id="banHeader" class="hidden">管理</th></tr></thead>
+        <tbody id="rankingBody"></tbody>
+      </table>
+    </div>
 
     <div class="box">
       <h3>🎲 ゲーム進行</h3>
@@ -49,7 +49,7 @@
         <button id="joinBtn" onclick="joinGame()">このゲームに参加する</button>
 
         <div id="inputForm" class="hidden" style="margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 10px;">
-          <p>あなたの結果を入力してください </p>
+          <p>あなたの結果を入力してください (全員入力で自動計算)</p>
           順位 (a): <input type="number" id="inputA" min="1" style="width: 50px;"><br>
           枚数 (b): <input type="number" id="inputB" style="width: 50px;"><br>
           サイコロ (c): <input type="number" id="inputC" style="width: 50px;"><br>
@@ -64,6 +64,9 @@
       <div>
         <button id="undoBtn" onclick="undoAction()" disabled>1つ前の変更に戻す</button>
         <button onclick="downloadRankingCsv()">ランキングCSVダウンロード</button>
+      </div>
+      <div style="margin-top: 10px;">
+        CSV反映: <input type="file" id="csvFileInput" accept=".csv,text/csv" onchange="importRankingCsv(this)">
       </div>
       <div style="margin-top: 10px;">
         <button onclick="forceResetGame()">進行中ゲームを強制終了</button>
@@ -158,6 +161,59 @@
       socket.emit('adminAction', { username: currentUser, type: 'forceResetGame' });
     }
 
+    function parseCsvLine(line) {
+      const result = [];
+      let cur = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            cur += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (ch === ',' && !inQuotes) {
+          result.push(cur.trim());
+          cur = '';
+        } else {
+          cur += ch;
+        }
+      }
+      result.push(cur.trim());
+      return result;
+    }
+
+    function importRankingCsv(inputEl) {
+      if (currentUser !== 'ad' || !inputEl.files || !inputEl.files[0]) return;
+      const file = inputEl.files[0];
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = String(reader.result || '').replace(/^\uFEFF/, '');
+        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        const entries = [];
+        lines.forEach((line, idx) => {
+          const cols = parseCsvLine(line);
+          if (cols.length < 2) return;
+          if (idx === 0 && (cols[0].includes('順位') || cols[0].includes('プレイヤー') || cols[1].includes('プレイヤー'))) {
+            return;
+          }
+          const name = cols.length >= 3 ? cols[1] : cols[0];
+          const rawPt = cols.length >= 3 ? cols[2] : cols[1];
+          const pt = Number(String(rawPt).replace(/[^\d.-]/g, ''));
+          if (name && !Number.isNaN(pt)) {
+            entries.push({ name, points: pt });
+          }
+        });
+        if (entries.length > 0) {
+          socket.emit('adminAction', { username: currentUser, type: 'importCsv', entries });
+        }
+        inputEl.value = '';
+      };
+      reader.readAsText(file, 'UTF-8');
+    }
+
     function getRankedUsers(state) {
       return Object.entries(state.users || {})
         .filter(([name]) => name !== 'ad' && !(state.banned || []).includes(name))
@@ -211,12 +267,15 @@
         return;
       }
 
+      if (!currentUser) {
+        document.getElementById('rankingBox').classList.add('hidden');
+        return;
+      }
+
       const isAdmin = currentUser === 'ad';
       document.getElementById('adminPanel').classList.toggle('hidden', !isAdmin);
       document.getElementById('banHeader').classList.toggle('hidden', !isAdmin);
-      if (currentUser) {
-        document.getElementById('undoBtn').disabled = !state.prevSnapshot;
-      }
+      document.getElementById('undoBtn').disabled = !state.prevSnapshot;
 
       const game = state.game;
       const isPlaying = game.status === 'playing';
@@ -233,8 +292,6 @@
         const banCell = isAdmin ? `<td><button onclick="banUser('${name}')">BAN</button></td>` : '';
         tbody.innerHTML += `<tr><td>${idx + 1}位</td><td>${name}</td><td>${pointCell}</td>${banCell}</tr>`;
       });
-
-      if (!currentUser) return;
 
       const waitingArea = document.getElementById('waitingArea');
       const playingArea = document.getElementById('playingArea');
