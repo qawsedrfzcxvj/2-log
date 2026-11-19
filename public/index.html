@@ -45,6 +45,7 @@
 
       <div id="playingArea" class="hidden">
         <p>参加者 (<span id="joinedCount"></span>/<span id="totalCount"></span>人): <span id="participantList"></span></p>
+        <p id="lastPlaceLossPreview" style="color: #b45309; font-weight: bold;"></p>
         <button id="joinBtn" onclick="joinGame()">このゲームに参加する</button>
 
         <div id="inputForm" class="hidden" style="margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 10px;">
@@ -158,6 +159,10 @@
       location.reload();
     }
 
+    function formatSigned(n) {
+      return n > 0 ? `+${n}` : `${n}`;
+    }
+
     socket.on('bannedNotice', (username) => {
       if (currentUser === username) {
         handleBanned();
@@ -211,6 +216,8 @@
         document.getElementById('inputA').value = '';
         document.getElementById('inputB').value = '';
         document.getElementById('inputC').value = '';
+        document.getElementById('inputStatus').textContent = '';
+        document.getElementById('lastPlaceLossPreview').textContent = '';
       } else {
         document.getElementById('gameStatusText').textContent = 'ゲーム進行中！';
         waitingArea.classList.add('hidden');
@@ -220,15 +227,35 @@
         document.getElementById('totalCount').textContent = game.targetCount;
         document.getElementById('participantList').textContent = game.participants.join(', ') || 'なし';
 
+        const inputs = game.inputs || {};
+        const totalNonLastDelta = Object.values(inputs)
+          .filter(v => !v.isLast)
+          .reduce((acc, v) => acc + (Number(v.delta) || 0), 0);
+
+        const myInput = inputs[currentUser];
+        const lossPreviewEl = document.getElementById('lastPlaceLossPreview');
+
+        if (!myInput) {
+          lossPreviewEl.textContent = `現在の最下位減少予定: ${totalNonLastDelta} pt (変動 ${formatSigned(-totalNonLastDelta)} pt)`;
+        } else {
+          lossPreviewEl.textContent = '';
+        }
+
         const isJoined = game.participants.includes(currentUser);
         const isFull = game.participants.length >= game.targetCount;
         document.getElementById('joinBtn').classList.toggle('hidden', isJoined || isFull);
         document.getElementById('inputForm').classList.toggle('hidden', !isJoined);
 
-        const myInput = game.inputs[currentUser];
-        document.getElementById('inputStatus').textContent = myInput
-          ? `入力済み: 順位=${myInput.a}, 枚数=${myInput.b}, サイコロ=${myInput.c} (他の人を待っています...)`
-          : '';
+        const statusEl = document.getElementById('inputStatus');
+        if (myInput) {
+          if (myInput.isLast) {
+            statusEl.textContent = `入力済み (最下位): 順位=${myInput.a}, 枚数=${myInput.b}, サイコロ=${myInput.c} (全員入力で最下位の減点が確定します)`;
+          } else {
+            statusEl.textContent = `入力済み: 得た点数 ${formatSigned(myInput.delta)} pt (順位=${myInput.a}, 枚数=${myInput.b}, サイコロ=${myInput.c})`;
+          }
+        } else {
+          statusEl.textContent = '';
+        }
       }
     });
   </script>
