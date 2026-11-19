@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>テーブルゲーム点数計算</title>
+  <title>大富豪2</title>
   <style>
     body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 0 15px; line-height: 1.5; }
     .box { border: 1px solid #ccc; padding: 15px; margin-bottom: 15px; border-radius: 5px; }
@@ -16,6 +16,14 @@
 </head>
 <body>
 
+  <div id="rankingBox" class="box">
+    <h3>ランキング</h3>
+    <table>
+      <thead><tr><th>順位</th><th>プレイヤー名</th><th>所持ポイント</th><th id="banHeader" class="hidden">管理</th></tr></thead>
+      <tbody id="rankingBody"></tbody>
+    </table>
+  </div>
+
   <div id="loginBox" class="box">
     <h2>プレイヤーログイン / 新規登録</h2>
     <input type="text" id="usernameInput" placeholder="プレイヤー名を入力">
@@ -24,14 +32,6 @@
 
   <div id="mainApp" class="hidden">
     <p>ログイン中: <strong id="currentUserDisplay"></strong> <button onclick="logout()">ログアウト</button></p>
-
-    <div id="rankingBox" class="box">
-      <h3>🏆 所持ポイントランキング</h3>
-      <table>
-        <thead><tr><th>順位</th><th>プレイヤー名</th><th>所持ポイント</th><th id="banHeader" class="hidden">管理</th></tr></thead>
-        <tbody id="rankingBody"></tbody>
-      </table>
-    </div>
 
     <div class="box">
       <h3>🎲 ゲーム進行</h3>
@@ -49,11 +49,11 @@
         <button id="joinBtn" onclick="joinGame()">このゲームに参加する</button>
 
         <div id="inputForm" class="hidden" style="margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 10px;">
-          <p>あなたの結果を入力してください (全員入力で自動計算)</p>
+          <p>あなたの結果を入力してください </p>
           順位 (a): <input type="number" id="inputA" min="1" style="width: 50px;"><br>
           枚数 (b): <input type="number" id="inputB" style="width: 50px;"><br>
           サイコロ (c): <input type="number" id="inputC" style="width: 50px;"><br>
-          <button onclick="submitInput()">送信</button>
+          <button id="submitBtn" onclick="submitInput()">送信</button>
           <p id="inputStatus" style="color: green; font-weight: bold;"></p>
         </div>
       </div>
@@ -62,9 +62,8 @@
     <div id="adminPanel" class="box hidden" style="background: #f9f9f9;">
       <h3>⚙️ 管理者メニュー</h3>
       <div>
-        プレイヤー: <select id="adminUserSelect"></select>
-        増減値: <input type="number" id="adminAmount" placeholder="例: 10 または -5" style="width: 110px;">
-        <button onclick="adjustPoints()">点数変更</button>
+        <button id="undoBtn" onclick="undoAction()" disabled>1つ前の変更に戻す</button>
+        <button onclick="downloadRankingCsv()">ランキングCSVダウンロード</button>
       </div>
       <div style="margin-top: 10px;">
         <button onclick="forceResetGame()">進行中ゲームを強制終了</button>
@@ -83,6 +82,12 @@
       socket.emit('login', currentUser);
       showMain();
     }
+
+    socket.on('connect', () => {
+      if (currentUser) {
+        socket.emit('login', currentUser);
+      }
+    });
 
     function login() {
       const name = document.getElementById('usernameInput').value.trim();
@@ -124,13 +129,14 @@
       socket.emit('submitInput', { username: currentUser, a, b, c });
     }
 
-    function adjustPoints() {
+    function setUserPoints(targetUser, value) {
       if (currentUser !== 'ad') return;
-      const targetUser = document.getElementById('adminUserSelect').value;
-      const amount = document.getElementById('adminAmount').value;
-      if (!targetUser || !amount) return;
-      socket.emit('adminAction', { username: currentUser, type: 'adjust', targetUser, amount });
-      document.getElementById('adminAmount').value = '';
+      socket.emit('adminAction', { username: currentUser, type: 'setPoints', targetUser, points: Number(value) });
+    }
+
+    function undoAction() {
+      if (currentUser !== 'ad') return;
+      socket.emit('adminAction', { username: currentUser, type: 'undo' });
     }
 
     function banUser(targetUser) {
@@ -150,6 +156,29 @@
     function forceResetGame() {
       if (currentUser !== 'ad') return;
       socket.emit('adminAction', { username: currentUser, type: 'forceResetGame' });
+    }
+
+    function getRankedUsers(state) {
+      return Object.entries(state.users || {})
+        .filter(([name]) => name !== 'ad' && !(state.banned || []).includes(name))
+        .sort((a, b) => b[1].points - a[1].points);
+    }
+
+    function downloadRankingCsv() {
+      if (!currentState || currentUser !== 'ad') return;
+      const ranked = getRankedUsers(currentState);
+      const rows = [['順位', 'プレイヤー名', '所持ポイント']];
+      ranked.forEach(([name, data], idx) => {
+        rows.push([idx + 1, name, data.points]);
+      });
+      const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'ranking.csv';
+      a.click();
+      URL.revokeObjectURL(url);
     }
 
     function handleBanned() {
@@ -185,26 +214,27 @@
       const isAdmin = currentUser === 'ad';
       document.getElementById('adminPanel').classList.toggle('hidden', !isAdmin);
       document.getElementById('banHeader').classList.toggle('hidden', !isAdmin);
+      if (currentUser) {
+        document.getElementById('undoBtn').disabled = !state.prevSnapshot;
+      }
 
       const game = state.game;
       const isPlaying = game.status === 'playing';
-      document.getElementById('rankingBox').classList.toggle('hidden', isPlaying);
+      document.getElementById('rankingBox').classList.toggle('hidden', isPlaying && !isAdmin);
 
-      const allUsers = Object.entries(state.users);
-      const rankedUsers = allUsers
-        .filter(([name]) => name !== 'ad' && !(state.banned || []).includes(name))
-        .sort((a, b) => b[1].points - a[1].points);
-
+      const rankedUsers = getRankedUsers(state);
       const tbody = document.getElementById('rankingBody');
-      const select = document.getElementById('adminUserSelect');
       tbody.innerHTML = '';
-      select.innerHTML = '';
 
       rankedUsers.forEach(([name, data], idx) => {
+        const pointCell = isAdmin
+          ? `<input type="number" value="${data.points}" style="width: 80px;" onchange="setUserPoints('${name}', this.value)"> pt`
+          : `${data.points} pt`;
         const banCell = isAdmin ? `<td><button onclick="banUser('${name}')">BAN</button></td>` : '';
-        tbody.innerHTML += `<tr><td>${idx + 1}位</td><td>${name}</td><td>${data.points} pt</td>${banCell}</tr>`;
-        select.innerHTML += `<option value="${name}">${name}</option>`;
+        tbody.innerHTML += `<tr><td>${idx + 1}位</td><td>${name}</td><td>${pointCell}</td>${banCell}</tr>`;
       });
+
+      if (!currentUser) return;
 
       const waitingArea = document.getElementById('waitingArea');
       const playingArea = document.getElementById('playingArea');
@@ -218,6 +248,7 @@
         document.getElementById('inputC').value = '';
         document.getElementById('inputStatus').textContent = '';
         document.getElementById('lastPlaceLossPreview').textContent = '';
+        document.getElementById('submitBtn').textContent = '送信';
       } else {
         document.getElementById('gameStatusText').textContent = 'ゲーム進行中！';
         waitingArea.classList.add('hidden');
@@ -232,28 +263,29 @@
           .filter(v => !v.isLast)
           .reduce((acc, v) => acc + (Number(v.delta) || 0), 0);
 
-        const myInput = inputs[currentUser];
-        const lossPreviewEl = document.getElementById('lastPlaceLossPreview');
-
-        if (!myInput) {
-          lossPreviewEl.textContent = `現在の最下位減少予定: ${totalNonLastDelta} pt (変動 ${formatSigned(-totalNonLastDelta)} pt)`;
-        } else {
-          lossPreviewEl.textContent = '';
-        }
-
         const isJoined = game.participants.includes(currentUser);
+        const lossPreviewEl = document.getElementById('lastPlaceLossPreview');
+        lossPreviewEl.textContent = isJoined
+          ? `現在の最下位減少予定: ${formatSigned(-totalNonLastDelta)} pt`
+          : '';
+
         const isFull = game.participants.length >= game.targetCount;
         document.getElementById('joinBtn').classList.toggle('hidden', isJoined || isFull);
         document.getElementById('inputForm').classList.toggle('hidden', !isJoined);
 
+        const myInput = inputs[currentUser];
         const statusEl = document.getElementById('inputStatus');
+        const submitBtn = document.getElementById('submitBtn');
+
         if (myInput) {
+          submitBtn.textContent = '変更';
           if (myInput.isLast) {
             statusEl.textContent = `入力済み (最下位): 順位=${myInput.a}, 枚数=${myInput.b}, サイコロ=${myInput.c} (全員入力で最下位の減点が確定します)`;
           } else {
             statusEl.textContent = `入力済み: 得た点数 ${formatSigned(myInput.delta)} pt (順位=${myInput.a}, 枚数=${myInput.b}, サイコロ=${myInput.c})`;
           }
         } else {
+          submitBtn.textContent = '送信';
           statusEl.textContent = '';
         }
       }
