@@ -41,6 +41,25 @@ function saveAndBroadcast() {
   io.emit('stateUpdate', state);
 }
 
+function getRankDelta(rank, targetCount, b, c) {
+  const N = Number(targetCount) || 2;
+  const idx = Math.max(0, Number(rank) - 1);
+  const half = Math.floor(N / 2);
+  const isOdd = N % 2 !== 0;
+  const mag = Number(b) * Number(c);
+
+  if (idx < half) return mag;
+  if (isOdd && idx === half) return 0;
+  return -mag;
+}
+
+function getLastPlaceUser(inputs) {
+  const entries = Object.entries(inputs);
+  if (entries.length === 0) return null;
+  entries.sort((x, y) => y[1].a - x[1].a);
+  return entries[0][0];
+}
+
 io.on('connection', (socket) => {
   socket.emit('stateUpdate', state);
 
@@ -80,10 +99,34 @@ io.on('connection', (socket) => {
     if (state.banned.includes(username)) return;
     if (state.game.status !== 'playing') return;
     if (!state.game.participants.includes(username)) return;
-    state.game.inputs[username] = { a: Number(a), b: Number(b), c: Number(c) };
+
+    const numA = Number(a);
+    const numB = Number(b);
+    const numC = Number(c);
+    const prev = state.game.inputs[username];
+
+    if (prev && prev.appliedDelta && state.users[username]) {
+      state.users[username].points -= prev.appliedDelta;
+    }
+
+    const isLast = numA === state.game.targetCount;
+    const delta = isLast ? 0 : getRankDelta(numA, state.game.targetCount, numB, numC);
+
+    if (!isLast && state.users[username]) {
+      state.users[username].points += delta;
+    }
+
+    state.game.inputs[username] = {
+      a: numA,
+      b: numB,
+      c: numC,
+      delta,
+      appliedDelta: isLast ? 0 : delta,
+      isLast
+    };
 
     if (Object.keys(state.game.inputs).length === state.game.targetCount) {
-      calculateScores();
+      finalizeLastPlace();
     } else {
       saveAndBroadcast();
     }
@@ -115,23 +158,20 @@ io.on('connection', (socket) => {
   });
 });
 
-function calculateScores() {
-  const N = state.game.targetCount;
-  const sorted = Object.entries(state.game.inputs).sort((x, y) => x[1].a - y[1].a);
+function finalizeLastPlace() {
+  const entries = Object.entries(state.game.inputs);
+  const lastUser = getLastPlaceUser(state.game.inputs);
 
-  const half = Math.floor(N / 2);
-  const isOdd = N % 2 !== 0;
-
-  sorted.forEach(([username, val], index) => {
-    if (!state.users[username]) return;
-    const delta = val.b * val.c;
-    if (index < half) {
-      state.users[username].points += delta;
-    } else if (isOdd && index === half) {
-    } else {
-      state.users[username].points -= delta;
+  let nonLastSum = 0;
+  entries.forEach(([user, val]) => {
+    if (user !== lastUser) {
+      nonLastSum += Number(val.delta) || 0;
     }
   });
+
+  if (lastUser && state.users[lastUser]) {
+    state.users[lastUser].points -= nonLastSum;
+  }
 
   state.game.status = 'waiting';
   state.game.participants = [];
