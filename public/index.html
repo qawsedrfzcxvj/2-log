@@ -16,18 +16,15 @@
 </head>
 <body>
 
-  <!-- ログイン画面 -->
   <div id="loginBox" class="box">
     <h2>プレイヤーログイン / 新規登録</h2>
     <input type="text" id="usernameInput" placeholder="プレイヤー名を入力">
     <button onclick="login()">入室</button>
   </div>
 
-  <!-- メイン画面 -->
   <div id="mainApp" class="hidden">
     <p>ログイン中: <strong id="currentUserDisplay"></strong> <button onclick="logout()">ログアウト</button></p>
 
-    <!-- 1. ランキング表 -->
     <div class="box">
       <h3>🏆 所持ポイントランキング</h3>
       <table>
@@ -36,19 +33,16 @@
       </table>
     </div>
 
-    <!-- 2. ゲーム進行・入力エリア -->
     <div class="box">
       <h3>🎲 ゲーム進行</h3>
       <div id="gameStatusText"></div>
 
-      <!-- 待機中：GMによるゲーム開始設定 -->
       <div id="waitingArea" class="hidden">
         <p><strong>[ゲームマスター操作]</strong></p>
         参加人数: <input type="number" id="targetCountInput" value="4" min="2" style="width: 60px;">
         <button onclick="startGame()">新規ゲーム開始</button>
       </div>
 
-      <!-- プレイ中：参加と数値入力 -->
       <div id="playingArea" class="hidden">
         <p>参加者 (<span id="joinedCount"></span>/<span id="totalCount"></span>人): <span id="participantList"></span></p>
         <button id="joinBtn" onclick="joinGame()">このゲームに参加する</button>
@@ -64,8 +58,7 @@
       </div>
     </div>
 
-    <!-- 3. 管理者パネル -->
-    <div class="box" style="background: #f9f9f9;">
+    <div id="adminPanel" class="box hidden" style="background: #f9f9f9;">
       <h3>⚙️ 管理者メニュー</h3>
       <div>
         プレイヤー: <select id="adminUserSelect"></select>
@@ -108,11 +101,13 @@
       document.getElementById('loginBox').classList.add('hidden');
       document.getElementById('mainApp').classList.remove('hidden');
       document.getElementById('currentUserDisplay').textContent = currentUser;
+      document.getElementById('adminPanel').classList.toggle('hidden', currentUser !== 'ad');
     }
 
     function startGame() {
+      if (currentUser !== 'ad') return;
       const targetCount = document.getElementById('targetCountInput').value;
-      socket.emit('startGame', { targetCount });
+      socket.emit('startGame', { username: currentUser, targetCount });
     }
 
     function joinGame() {
@@ -128,47 +123,57 @@
     }
 
     function adjustPoints() {
+      if (currentUser !== 'ad') return;
       const targetUser = document.getElementById('adminUserSelect').value;
       const amount = document.getElementById('adminAmount').value;
       if (!targetUser || !amount) return;
-      socket.emit('adminAction', { type: 'adjust', targetUser, amount });
+      socket.emit('adminAction', { username: currentUser, type: 'adjust', targetUser, amount });
       document.getElementById('adminAmount').value = '';
     }
 
     function resetAllPoints() {
+      if (currentUser !== 'ad') return;
       if (confirm('本当に全員の点数を0にリセットしますか？')) {
-        socket.emit('adminAction', { type: 'resetAll' });
+        socket.emit('adminAction', { username: currentUser, type: 'resetAll' });
       }
     }
 
     function forceResetGame() {
-      socket.emit('adminAction', { type: 'forceResetGame' });
+      if (currentUser !== 'ad') return;
+      socket.emit('adminAction', { username: currentUser, type: 'forceResetGame' });
     }
 
-    // サーバーからの状態更新を受信して画面再描画
     socket.on('stateUpdate', (state) => {
       currentState = state;
+      document.getElementById('adminPanel').classList.toggle('hidden', currentUser !== 'ad');
 
-      // ランキング更新
-      const sortedUsers = Object.entries(state.users).sort((a, b) => b[1].points - a[1].points);
+      const allUsers = Object.entries(state.users);
+      const rankedUsers = allUsers
+        .filter(([name]) => name !== 'ad')
+        .sort((a, b) => b[1].points - a[1].points);
+
       const tbody = document.getElementById('rankingBody');
       const select = document.getElementById('adminUserSelect');
       tbody.innerHTML = '';
       select.innerHTML = '';
 
-      sortedUsers.forEach(([name, data], idx) => {
+      rankedUsers.forEach(([name, data], idx) => {
         tbody.innerHTML += `<tr><td>${idx + 1}位</td><td>${name}</td><td>${data.points} pt</td></tr>`;
-        select.innerHTML += `<option value="${name}">${name}</option>`;
       });
 
-      // ゲーム状態更新
+      allUsers
+        .filter(([name]) => name !== 'ad')
+        .forEach(([name]) => {
+          select.innerHTML += `<option value="${name}">${name}</option>`;
+        });
+
       const game = state.game;
       const waitingArea = document.getElementById('waitingArea');
       const playingArea = document.getElementById('playingArea');
 
       if (game.status === 'waiting') {
         document.getElementById('gameStatusText').textContent = '現在ゲームは開始されていません。';
-        waitingArea.classList.remove('hidden');
+        waitingArea.classList.toggle('hidden', currentUser !== 'ad');
         playingArea.classList.add('hidden');
       } else {
         document.getElementById('gameStatusText').textContent = 'ゲーム進行中！';
@@ -185,8 +190,8 @@
         document.getElementById('inputForm').classList.toggle('hidden', !isJoined);
 
         const myInput = game.inputs[currentUser];
-        document.getElementById('inputStatus').textContent = myInput 
-          ? `入力済み: 順位=${myInput.a}, 枚数=${myInput.b}, サイコロ=${myInput.c} (他の人を待っています...)` 
+        document.getElementById('inputStatus').textContent = myInput
+          ? `入力済み: 順位=${myInput.a}, 枚数=${myInput.b}, サイコロ=${myInput.c} (他の人を待っています...)`
           : '';
       }
     });
