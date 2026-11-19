@@ -25,10 +25,10 @@
   <div id="mainApp" class="hidden">
     <p>ログイン中: <strong id="currentUserDisplay"></strong> <button onclick="logout()">ログアウト</button></p>
 
-    <div class="box">
+    <div id="rankingBox" class="box">
       <h3>🏆 所持ポイントランキング</h3>
       <table>
-        <thead><tr><th>順位</th><th>プレイヤー名</th><th>所持ポイント</th></tr></thead>
+        <thead><tr><th>順位</th><th>プレイヤー名</th><th>所持ポイント</th><th id="banHeader" class="hidden">管理</th></tr></thead>
         <tbody id="rankingBody"></tbody>
       </table>
     </div>
@@ -102,6 +102,7 @@
       document.getElementById('mainApp').classList.remove('hidden');
       document.getElementById('currentUserDisplay').textContent = currentUser;
       document.getElementById('adminPanel').classList.toggle('hidden', currentUser !== 'ad');
+      document.getElementById('banHeader').classList.toggle('hidden', currentUser !== 'ad');
     }
 
     function startGame() {
@@ -131,6 +132,13 @@
       document.getElementById('adminAmount').value = '';
     }
 
+    function banUser(targetUser) {
+      if (currentUser !== 'ad') return;
+      if (confirm(`${targetUser} をBANしますか？`)) {
+        socket.emit('adminAction', { username: currentUser, type: 'banUser', targetUser });
+      }
+    }
+
     function resetAllPoints() {
       if (currentUser !== 'ad') return;
       if (confirm('本当に全員の点数を0にリセットしますか？')) {
@@ -143,13 +151,43 @@
       socket.emit('adminAction', { username: currentUser, type: 'forceResetGame' });
     }
 
+    function handleBanned() {
+      localStorage.removeItem('bg_username');
+      currentUser = '';
+      alert('このユーザー名はBANされています。');
+      location.reload();
+    }
+
+    socket.on('bannedNotice', (username) => {
+      if (currentUser === username) {
+        handleBanned();
+      }
+    });
+
+    socket.on('userBanned', (username) => {
+      if (currentUser === username) {
+        handleBanned();
+      }
+    });
+
     socket.on('stateUpdate', (state) => {
       currentState = state;
-      document.getElementById('adminPanel').classList.toggle('hidden', currentUser !== 'ad');
+      if (currentUser && (state.banned || []).includes(currentUser)) {
+        handleBanned();
+        return;
+      }
+
+      const isAdmin = currentUser === 'ad';
+      document.getElementById('adminPanel').classList.toggle('hidden', !isAdmin);
+      document.getElementById('banHeader').classList.toggle('hidden', !isAdmin);
+
+      const game = state.game;
+      const isPlaying = game.status === 'playing';
+      document.getElementById('rankingBox').classList.toggle('hidden', isPlaying);
 
       const allUsers = Object.entries(state.users);
       const rankedUsers = allUsers
-        .filter(([name]) => name !== 'ad')
+        .filter(([name]) => name !== 'ad' && !(state.banned || []).includes(name))
         .sort((a, b) => b[1].points - a[1].points);
 
       const tbody = document.getElementById('rankingBody');
@@ -158,23 +196,21 @@
       select.innerHTML = '';
 
       rankedUsers.forEach(([name, data], idx) => {
-        tbody.innerHTML += `<tr><td>${idx + 1}位</td><td>${name}</td><td>${data.points} pt</td></tr>`;
+        const banCell = isAdmin ? `<td><button onclick="banUser('${name}')">BAN</button></td>` : '';
+        tbody.innerHTML += `<tr><td>${idx + 1}位</td><td>${name}</td><td>${data.points} pt</td>${banCell}</tr>`;
+        select.innerHTML += `<option value="${name}">${name}</option>`;
       });
 
-      allUsers
-        .filter(([name]) => name !== 'ad')
-        .forEach(([name]) => {
-          select.innerHTML += `<option value="${name}">${name}</option>`;
-        });
-
-      const game = state.game;
       const waitingArea = document.getElementById('waitingArea');
       const playingArea = document.getElementById('playingArea');
 
-      if (game.status === 'waiting') {
+      if (!isPlaying) {
         document.getElementById('gameStatusText').textContent = '現在ゲームは開始されていません。';
-        waitingArea.classList.toggle('hidden', currentUser !== 'ad');
+        waitingArea.classList.toggle('hidden', !isAdmin);
         playingArea.classList.add('hidden');
+        document.getElementById('inputA').value = '';
+        document.getElementById('inputB').value = '';
+        document.getElementById('inputC').value = '';
       } else {
         document.getElementById('gameStatusText').textContent = 'ゲーム進行中！';
         waitingArea.classList.add('hidden');
