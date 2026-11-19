@@ -13,6 +13,7 @@ const DATA_FILE = './data.json';
 
 let state = {
   users: {},
+  banned: [],
   game: {
     status: 'waiting',
     targetCount: 4,
@@ -27,6 +28,7 @@ if (fs.existsSync(DATA_FILE)) {
     if (fileContent.trim()) {
       const parsed = JSON.parse(fileContent);
       state.users = parsed.users || {};
+      state.banned = parsed.banned || [];
       state.game = parsed.game || state.game;
     }
   } catch (e) {
@@ -44,6 +46,10 @@ io.on('connection', (socket) => {
 
   socket.on('login', (username) => {
     if (!username) return;
+    if (state.banned.includes(username)) {
+      socket.emit('bannedNotice', username);
+      return;
+    }
     if (!state.users[username]) {
       state.users[username] = { points: 0 };
     }
@@ -62,6 +68,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('joinGame', (username) => {
+    if (state.banned.includes(username)) return;
     if (state.game.status !== 'playing') return;
     if (!state.game.participants.includes(username) && state.game.participants.length < state.game.targetCount) {
       state.game.participants.push(username);
@@ -70,6 +77,8 @@ io.on('connection', (socket) => {
   });
 
   socket.on('submitInput', ({ username, a, b, c }) => {
+    if (state.banned.includes(username)) return;
+    if (state.game.status !== 'playing') return;
     if (!state.game.participants.includes(username)) return;
     state.game.inputs[username] = { a: Number(a), b: Number(b), c: Number(c) };
 
@@ -85,10 +94,22 @@ io.on('connection', (socket) => {
     if (type === 'resetAll') {
       Object.keys(state.users).forEach(u => state.users[u].points = 0);
       state.game.status = 'waiting';
+      state.game.participants = [];
+      state.game.inputs = {};
     } else if (type === 'adjust' && state.users[targetUser]) {
       state.users[targetUser].points += Number(amount);
     } else if (type === 'forceResetGame') {
       state.game.status = 'waiting';
+      state.game.participants = [];
+      state.game.inputs = {};
+    } else if (type === 'banUser' && targetUser && targetUser !== 'ad') {
+      if (!state.banned.includes(targetUser)) {
+        state.banned.push(targetUser);
+      }
+      delete state.users[targetUser];
+      state.game.participants = state.game.participants.filter(u => u !== targetUser);
+      delete state.game.inputs[targetUser];
+      io.emit('userBanned', targetUser);
     }
     saveAndBroadcast();
   });
@@ -102,6 +123,7 @@ function calculateScores() {
   const isOdd = N % 2 !== 0;
 
   sorted.forEach(([username, val], index) => {
+    if (!state.users[username]) return;
     const delta = val.b * val.c;
     if (index < half) {
       state.users[username].points += delta;
@@ -112,6 +134,8 @@ function calculateScores() {
   });
 
   state.game.status = 'waiting';
+  state.game.participants = [];
+  state.game.inputs = {};
   saveAndBroadcast();
 }
 
