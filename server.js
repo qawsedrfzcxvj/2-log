@@ -14,6 +14,7 @@ const DATA_FILE = './data.json';
 let state = {
   users: {},
   banned: [],
+  prevSnapshot: null,
   game: {
     status: 'waiting',
     targetCount: 4,
@@ -29,6 +30,7 @@ if (fs.existsSync(DATA_FILE)) {
       const parsed = JSON.parse(fileContent);
       state.users = parsed.users || {};
       state.banned = parsed.banned || [];
+      state.prevSnapshot = parsed.prevSnapshot || null;
       state.game = parsed.game || state.game;
     }
   } catch (e) {
@@ -39,6 +41,14 @@ if (fs.existsSync(DATA_FILE)) {
 function saveAndBroadcast() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(state));
   io.emit('stateUpdate', state);
+}
+
+function pushSnapshot() {
+  state.prevSnapshot = {
+    users: JSON.parse(JSON.stringify(state.users)),
+    banned: JSON.parse(JSON.stringify(state.banned)),
+    game: JSON.parse(JSON.stringify(state.game))
+  };
 }
 
 function getRankDelta(rank, targetCount, b, c) {
@@ -132,15 +142,28 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('adminAction', ({ username, type, targetUser, amount }) => {
+  socket.on('adminAction', ({ username, type, targetUser, points }) => {
     if (username !== 'ad') return;
+    if (type === 'undo') {
+      if (state.prevSnapshot) {
+        state.users = state.prevSnapshot.users;
+        state.banned = state.prevSnapshot.banned;
+        state.game = state.prevSnapshot.game;
+        state.prevSnapshot = null;
+        saveAndBroadcast();
+      }
+      return;
+    }
+
+    pushSnapshot();
+
     if (type === 'resetAll') {
       Object.keys(state.users).forEach(u => state.users[u].points = 0);
       state.game.status = 'waiting';
       state.game.participants = [];
       state.game.inputs = {};
-    } else if (type === 'adjust' && state.users[targetUser]) {
-      state.users[targetUser].points += Number(amount);
+    } else if (type === 'setPoints' && state.users[targetUser]) {
+      state.users[targetUser].points = Number(points) || 0;
     } else if (type === 'forceResetGame') {
       state.game.status = 'waiting';
       state.game.participants = [];
@@ -159,6 +182,7 @@ io.on('connection', (socket) => {
 });
 
 function finalizeLastPlace() {
+  pushSnapshot();
   const entries = Object.entries(state.game.inputs);
   const lastUser = getLastPlaceUser(state.game.inputs);
 
