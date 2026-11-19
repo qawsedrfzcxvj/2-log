@@ -142,7 +142,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('adminAction', ({ username, type, targetUser, points }) => {
+  socket.on('adminAction', ({ username, type, targetUser, points, entries }) => {
     if (username !== 'ad') return;
     if (type === 'undo') {
       if (state.prevSnapshot) {
@@ -164,6 +164,11 @@ io.on('connection', (socket) => {
       state.game.inputs = {};
     } else if (type === 'setPoints' && state.users[targetUser]) {
       state.users[targetUser].points = Number(points) || 0;
+    } else if (type === 'importCsv' && Array.isArray(entries)) {
+      entries.forEach(({ name, points: pt }) => {
+        if (!name || name === 'ad' || state.banned.includes(name)) return;
+        state.users[name] = { points: Number(pt) || 0 };
+      });
     } else if (type === 'forceResetGame') {
       state.game.status = 'waiting';
       state.game.participants = [];
